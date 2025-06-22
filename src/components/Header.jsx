@@ -26,9 +26,9 @@ const Header = () => {
       animate={{ y: 0 }}
       className="sticky top-0 z-50 w-full border-b bg-white/80 backdrop-blur-md shadow-lg"
     >
-      <div className="container mx-auto px-4">
+      <div className="max-w-7xl mx-auto px-4">
         <div className="flex h-16 items-center justify-between">
-          <Link to="/" className="flex items-center space-x-2">
+          <Link to="/" className="flex items-center gap-2">
             <div className="relative">
               <Store className="h-8 w-8 text-blue-600" />
               <div className="absolute -top-1 -right-1 h-3 w-3 bg-orange-500 rounded-full animate-pulse" />
@@ -38,34 +38,36 @@ const Header = () => {
             </span>
           </Link>
 
-          <nav className="hidden md:flex items-center space-x-8">
+          {/* Navegación en escritorio */}
+          <nav className="hidden md:flex items-center gap-6">
             <Link
               to="/"
-              className={`font-medium transition-colors hover:text-blue-600 ${
+              className={`font-medium ${
                 isActive("/") ? "text-blue-600" : "text-gray-700"
-              }`}
+              } hover:text-blue-600`}
             >
               Inicio
             </Link>
             <Link
               to="/negocios"
-              className={`font-medium transition-colors hover:text-blue-600 ${
+              className={`font-medium ${
                 isActive("/negocios") ? "text-blue-600" : "text-gray-700"
-              }`}
+              } hover:text-blue-600`}
             >
               Negocios
             </Link>
             <Link
               to="/planes"
-              className={`font-medium transition-colors hover:text-orange-600 ${
+              className={`font-medium ${
                 isActive("/planes") ? "text-orange-600" : "text-gray-700"
-              }`}
+              } hover:text-orange-600`}
             >
               Planes
             </Link>
           </nav>
 
-          <div className="hidden md:flex items-center space-x-4">
+          {/* Botones escritorio */}
+          <div className="hidden md:flex items-center gap-3">
             <Button
               variant="ghost"
               size="sm"
@@ -93,6 +95,7 @@ const Header = () => {
             </Link>
           </div>
 
+          {/* Botón menú móvil */}
           <Button
             variant="ghost"
             size="sm"
@@ -107,6 +110,7 @@ const Header = () => {
           </Button>
         </div>
 
+        {/* Menú móvil */}
         {isMenuOpen && (
           <motion.div
             initial={{ opacity: 0, height: 0 }}
@@ -116,49 +120,29 @@ const Header = () => {
           >
             <div className="px-4 py-6 space-y-4">
               <nav className="space-y-2">
-                <Link
-                  to="/"
-                  className={`block py-2 font-medium transition-colors ${
-                    isActive("/") ? "text-blue-600" : "text-gray-700"
-                  }`}
-                  onClick={() => setIsMenuOpen(false)}
-                >
-                  Inicio
-                </Link>
-                <Link
-                  to="/negocios"
-                  className={`block py-2 font-medium transition-colors ${
-                    isActive("/negocios") ? "text-blue-600" : "text-gray-700"
-                  }`}
-                  onClick={() => setIsMenuOpen(false)}
-                >
-                  Negocios
-                </Link>
-                <Link
-                  to="/planes"
-                  className={`block py-2 font-medium transition-colors ${
-                    isActive("/planes") ? "text-orange-600" : "text-gray-700"
-                  }`}
-                  onClick={() => setIsMenuOpen(false)}
-                >
-                  Planes
-                </Link>
-                <Link
-                  to="/admin"
-                  className="block py-2 font-medium text-gray-700 hover:text-blue-600 transition-colors"
-                  onClick={() => setIsMenuOpen(false)}
-                >
-                  Panel Admin
-                </Link>
-                <Link
-                  to="/registro/free"
-                  className="block py-2 font-medium text-orange-600 hover:text-orange-700 transition-colors"
-                  onClick={() => setIsMenuOpen(false)}
-                >
-                  Registrar Negocio
-                </Link>
+                {[
+                  { path: "/", label: "Inicio" },
+                  { path: "/negocios", label: "Negocios" },
+                  { path: "/planes", label: "Planes" },
+                  { path: "/admin", label: "Panel Admin" },
+                  { path: "/registro/free", label: "Registrar Negocio" },
+                ].map(({ path, label }) => (
+                  <Link
+                    key={path}
+                    to={path}
+                    className={`block py-2 font-medium transition-colors ${
+                      isActive(path)
+                        ? path === "/planes"
+                          ? "text-orange-600"
+                          : "text-blue-600"
+                        : "text-gray-700"
+                    }`}
+                    onClick={() => setIsMenuOpen(false)}
+                  >
+                    {label}
+                  </Link>
+                ))}
               </nav>
-
               <div className="pt-4 border-t">
                 <Button
                   variant="outline"
