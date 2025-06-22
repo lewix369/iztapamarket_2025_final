@@ -103,7 +103,7 @@ const Home = () => {
             >
               <div className="relative z-10">
                 <div className="relative w-full h-[28rem] flex justify-center items-center rounded-2xl shadow-2xl bg-gradient-to-b from-orange-500 via-orange-500 to-orange-400">
-                  <div className="absolute top-[60%] left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-white text-center text-lg md:text-xl font-semibold z-20 px-4 w-full max-w-xs">
+                  <div className="absolute top-[85%] left-1/2 transform -translate-x-1/2 text-white text-center text-lg md:text-xl font-semibold z-20 px-4 w-full max-w-xs">
                     <p className="mb-4 leading-snug">
                       Registra tu negocio{" "}
                       <span className="text-blue-800 font-extrabold underline underline-offset-4">
