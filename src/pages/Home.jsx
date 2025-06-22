@@ -103,8 +103,8 @@ const Home = () => {
             >
               <div className="relative z-10">
                 <div className="relative w-full h-[28rem] flex justify-center items-center rounded-2xl shadow-2xl bg-gradient-to-b from-orange-500 via-orange-500 to-orange-400">
-                  <div className="absolute top-[34%] left-[12%] transform -translate-y-1/2 text-white text-justify text-xl font-semibold z-20">
-                    <p className="mb-3">
+                  <div className="absolute top-[60%] left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-white text-center text-lg md:text-xl font-semibold z-20 px-4 w-full max-w-xs">
+                    <p className="mb-4 leading-snug">
                       Registra tu negocio{" "}
                       <span className="text-blue-800 font-extrabold underline underline-offset-4">
                         GRATIS
@@ -112,13 +112,13 @@ const Home = () => {
                     </p>
                     <div className="flex flex-col gap-3">
                       <Link to="/registro/free">
-                        <Button className="bg-blue-700 hover:bg-blue-800 text-white font-bold px-5 py-2 rounded-full shadow-md w-full text-center">
+                        <Button className="bg-blue-700 hover:bg-blue-800 text-white font-bold px-5 py-2 rounded-full shadow-md w-full text-center text-sm">
                           Registrar Negocio
                         </Button>
                       </Link>
                       <a
                         href="#"
-                        className="bg-white text-blue-700 hover:bg-gray-100 font-bold px-5 py-2 rounded-full shadow-md w-full text-center"
+                        className="bg-white text-blue-700 hover:bg-gray-100 font-bold px-5 py-2 rounded-full shadow-md w-full text-center text-sm"
                       >
                         Descargar App
                       </a>
