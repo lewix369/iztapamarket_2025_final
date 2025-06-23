@@ -1,19 +1,12 @@
-# Dependencias
+# Ignorar carpetas temporales
+.DS_Store
 node_modules/
-
-# Builds temporales
-.vite/
 dist/
+.vite/
 
-# Configuraciones privadas
+# Configuraciones locales
 .env
 .nvmrc
 
-# Archivos del sistema
-.DS_Store
-
-# Logs
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
+# Ignorar backup restaurado (¡muy importante!)
+iztapamarket_directorio_2025_RESTORE/
