@@ -113,3 +113,35 @@ export const getFeaturedBusinesses = async (supabase) => {
 
   return data;
 };
+
+export const getBusinesses = async (supabase) => {
+  const { data, error } = await supabase
+    .from("negocios")
+    .select("*")
+    .eq("is_deleted", false)
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    console.error("Error al obtener negocios:", error);
+    return [];
+  }
+
+  return data;
+};
+
+export const updateBusiness = async (supabase, businessId, updatedData) => {
+  const { data, error } = await supabase
+    .from("negocios")
+    .update(updatedData)
+    .eq("id", businessId)
+    .select()
+    .single();
+
+  if (error) {
+    console.error("❌ Error al actualizar negocio:", error.message);
+    throw error;
+  }
+
+  console.log("✅ Negocio actualizado con éxito:", data);
+  return data;
+};

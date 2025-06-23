@@ -103,18 +103,9 @@ const Home = () => {
             >
               <div className="relative z-10">
                 <div className="relative w-full h-[28rem] flex justify-center items-center rounded-2xl shadow-2xl bg-gradient-to-b from-orange-500 via-orange-500 to-orange-400">
-                  <img
-                    src="/iztapamarket%20cover.png"
-                    alt="Avatar IztapaMarket"
-                    className="h-[90%] object-contain md:mb-0 mb-32"
-                    onError={(e) => {
-                      e.target.onerror = null;
-                      e.target.src =
-                        "https://raw.githubusercontent.com/lewix369/iztapamarket_directorio_2025/main/public/iztapamarket%20cover.png";
-                    }}
-                  />
-                  <div className="absolute bottom-6 sm:bottom-10 left-1/2 transform -translate-x-1/2 text-white text-center text-lg md:text-xl font-semibold z-20 px-4 w-full max-w-xs">
-                    <p className="mb-4 leading-snug">
+                  {/* Botones para escritorio */}
+                  <div className="absolute top-[34%] left-[12%] transform -translate-y-1/2 text-white text-justify text-xl font-semibold z-20 hidden sm:block">
+                    <p className="mb-3">
                       Registra tu negocio{" "}
                       <span className="text-blue-800 font-extrabold underline underline-offset-4">
                         GRATIS
@@ -122,18 +113,54 @@ const Home = () => {
                     </p>
                     <div className="flex flex-col gap-3">
                       <Link to="/registro/free">
-                        <Button className="bg-blue-700 hover:bg-blue-800 text-white font-bold px-5 py-2 rounded-full shadow-md w-full text-center text-sm">
+                        <Button className="bg-blue-700 hover:bg-blue-800 text-white font-bold px-5 py-2 rounded-full shadow-md w-full text-center">
                           Registrar Negocio
                         </Button>
                       </Link>
                       <a
                         href="#"
-                        className="bg-white text-blue-700 hover:bg-gray-100 font-bold px-5 py-2 rounded-full shadow-md w-full text-center text-sm"
+                        className="bg-white text-blue-700 hover:bg-gray-100 font-bold px-5 py-2 rounded-full shadow-md w-full text-center"
                       >
                         Descargar App
                       </a>
                     </div>
                   </div>
+
+                  {/* Botones para mobile rediseñados */}
+                  <div className="block sm:hidden w-full px-6">
+                    <div className="flex flex-col items-center mt-64 text-white text-center text-lg font-semibold z-20">
+                      <p className="mb-3">
+                        Registra tu negocio{" "}
+                        <span className="text-blue-800 font-extrabold underline underline-offset-4">
+                          GRATIS
+                        </span>
+                      </p>
+                      <div className="flex flex-col gap-3 w-full max-w-xs">
+                        <Link to="/registro/free">
+                          <Button className="bg-blue-700 hover:bg-blue-800 text-white font-bold px-5 py-2 rounded-full shadow-md w-full text-center">
+                            Registrar Negocio
+                          </Button>
+                        </Link>
+                        <a
+                          href="#"
+                          className="bg-white text-blue-700 hover:bg-gray-100 font-bold px-5 py-2 rounded-full shadow-md w-full text-center"
+                        >
+                          Descargar App
+                        </a>
+                      </div>
+                    </div>
+                  </div>
+
+                  <img
+                    src="/iztapamarket%20cover.png"
+                    alt="Avatar IztapaMarket"
+                    className="h-[90%] object-contain"
+                    onError={(e) => {
+                      e.target.onerror = null;
+                      e.target.src =
+                        "https://raw.githubusercontent.com/lewix369/iztapamarket_directorio_2025/main/public/iztapamarket%20cover.png";
+                    }}
+                  />
                 </div>
               </div>
               <div className="absolute -top-4 -right-4 w-72 h-72 bg-orange-500/20 rounded-full blur-3xl"></div>

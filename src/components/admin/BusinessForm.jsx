@@ -6,7 +6,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/components/ui/use-toast';
-import { supabase } from '@/lib/supabaseClient';
 
 const BusinessForm = ({ initialData, onSubmit, onCancel, categoriesList }) => {
   const { toast } = useToast();
@@ -101,13 +100,6 @@ const BusinessForm = ({ initialData, onSubmit, onCancel, categoriesList }) => {
     });
 
     try {
-      // Simulación de llamada a la IA. Reemplazar con la llamada real.
-      // const { data: aiData, error: aiError } = await supabase.functions.invoke('generate-business-content', {
-      //   body: { name: formData.nombre, category: formData.categoria }
-      // });
-      // if (aiError) throw aiError;
-
-      // Simulación de respuesta de IA
       await new Promise(resolve => setTimeout(resolve, 2000)); 
       const aiData = {
         titulo: `Increíble ${formData.categoria}: ${formData.nombre}`,

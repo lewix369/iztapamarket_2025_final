@@ -1,0 +1,19 @@
+# Dependencias
+node_modules/
+
+# Builds temporales
+.vite/
+dist/
+
+# Configuraciones privadas
+.env
+.nvmrc
+
+# Archivos del sistema
+.DS_Store
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
