@@ -1,8 +1,8 @@
 {
   "rewrites": [
-    { "source": "/(.*)", "destination": "/" },
-    { "source": "/categorias/:slug", "destination": "/" },
-    { "source": "/negocio/:slug", "destination": "/" },
-    { "source": "/registro/:plan", "destination": "/" }
+    { "source": "/categorias/:slug*", "destination": "/" },
+    { "source": "/negocio/:slug*", "destination": "/" },
+    { "source": "/registro/:plan*", "destination": "/" },
+    { "source": "/(.*)", "destination": "/" }
   ]
 }
