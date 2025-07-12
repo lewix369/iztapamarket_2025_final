@@ -10,3 +10,4 @@ dist/
 
 # Ignorar backup restaurado (¡muy importante!)
 iztapamarket_directorio_2025_RESTORE/
+.vercel
