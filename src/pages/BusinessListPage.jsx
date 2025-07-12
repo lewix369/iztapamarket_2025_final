@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
+import { Helmet } from "react-helmet";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { motion } from "framer-motion";
 import { Search, Star, MapPin, Clock, Grid, List, FilterX } from "lucide-react";
@@ -145,6 +146,13 @@ const BusinessListPage = () => {
 
   return (
     <div className="min-h-screen">
+      <Helmet>
+        <title>Directorio de Negocios | IztapaMarket</title>
+        <meta
+          name="description"
+          content="Explora todos los negocios registrados en Iztapalapa. Filtra por categoría, plan o nombre en IztapaMarket."
+        />
+      </Helmet>
       <section className="bg-gradient-to-r from-blue-600 to-orange-600 text-white py-16">
         <div className="container mx-auto px-4">
           <motion.div
@@ -162,8 +170,8 @@ const BusinessListPage = () => {
         </div>
       </section>
 
-      <section className="bg-white border-b sticky top-16 z-40">
-        <div className="container mx-auto px-4 py-6">
+      <section className="bg-white border-b z-40 md:sticky md:top-16">
+        <div className="container mx-auto px-4 py-4 sm:py-6">
           <div className="space-y-4">
             <form
               onSubmit={handleSearchSubmit}
@@ -361,8 +369,14 @@ const BusinessListPage = () => {
                       </CardHeader>
                       <CardContent>
                         <p className="text-gray-600 mb-4 text-sm truncate">
-                          {business.descripcion}
+                          {business.descripcion || "Sin descripción disponible"}
                         </p>
+                        <div className="flex items-center space-x-2 text-sm text-gray-500">
+                          <span>📞</span>
+                          <span>
+                            {business.telefono || "Teléfono no disponible"}
+                          </span>
+                        </div>
                         <div className="space-y-2 mb-4">
                           <div className="flex items-center space-x-2 text-sm text-gray-500">
                             <MapPin className="h-4 w-4" />
@@ -436,8 +450,15 @@ const BusinessListPage = () => {
                             </div>
                           </div>
                           <p className="text-gray-600 mb-4 text-sm">
-                            {business.descripcion}
+                            {business.descripcion ||
+                              "Sin descripción disponible"}
                           </p>
+                          <div className="flex items-center space-x-2 text-sm text-gray-500 mb-2">
+                            <span>📞</span>
+                            <span>
+                              {business.telefono || "Teléfono no disponible"}
+                            </span>
+                          </div>
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                             <div className="flex items-center space-x-2 text-sm text-gray-500">
                               <MapPin className="h-4 w-4" />

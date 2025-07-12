@@ -1,14 +1,5 @@
-<<<<<<< HEAD
-User-agent: *
-Allow: /
-
-Sitemap: https://iztapamarket.com/sitemap.xml
-=======
-```
 User-agent: *
 Allow: /
 Disallow: /admin
 
 Sitemap: https://iztapamarket.com/sitemap.xml
-```
->>>>>>> 4bc38970 (Primer commit del proyecto listo para Vercel)

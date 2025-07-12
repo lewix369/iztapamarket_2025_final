@@ -25,7 +25,11 @@ export const updateApprovalStatus = async (supabase, businessId, status) => {
 };
 
 export const searchBusinesses = async (supabase, query, planType, category) => {
-  let request = supabase.from("negocios").select("*").eq("is_deleted", false);
+  let request = supabase
+    .from("negocios")
+    .select("*")
+    .eq("is_deleted", false)
+    .eq("is_approved", true);
 
   if (query) {
     request = request.ilike("nombre", `%${query}%`);
@@ -45,6 +49,8 @@ export const searchBusinesses = async (supabase, query, planType, category) => {
     console.error("Error al buscar negocios:", error);
     return [];
   }
+
+  console.log("Resultados de búsqueda:", data);
 
   return data;
 };
@@ -66,7 +72,7 @@ export const getDistinctCategories = async (supabase) => {
 export const createBusiness = async (supabase, businessData) => {
   const { data, error } = await supabase
     .from("negocios")
-    .insert([businessData])
+    .insert([{ ...businessData, is_approved: true }])
     .select()
     .single();
 
@@ -84,18 +90,18 @@ export const createBusiness = async (supabase, businessData) => {
 };
 
 export const softDeleteBusiness = async (supabase, businessId) => {
-  console.log("🗑 Eliminando negocio con ID:", businessId);
+  console.log("🗑 Eliminando definitivamente negocio con ID:", businessId);
   const { error } = await supabase
     .from("negocios")
-    .update({ is_deleted: true })
+    .delete()
     .eq("id", businessId);
 
   if (error) {
-    console.error("Error al eliminar negocio:", error);
+    console.error("Error al hacer hard delete:", error);
     throw error;
   }
 
-  console.log("✅ Negocio marcado como eliminado (soft delete)");
+  console.log("✅ Negocio eliminado completamente de la base de datos.");
 };
 
 export const getFeaturedBusinesses = async (supabase) => {
@@ -117,8 +123,9 @@ export const getFeaturedBusinesses = async (supabase) => {
 export const getBusinesses = async (supabase) => {
   const { data, error } = await supabase
     .from("negocios")
-    .select("*")
+    .select("*", { count: "exact" })
     .eq("is_deleted", false)
+    .eq("is_approved", true)
     .order("created_at", { ascending: false });
 
   if (error) {
@@ -126,6 +133,7 @@ export const getBusinesses = async (supabase) => {
     return [];
   }
 
+  console.log(data);
   return data;
 };
 
@@ -144,4 +152,33 @@ export const updateBusiness = async (supabase, businessId, updatedData) => {
 
   console.log("✅ Negocio actualizado con éxito:", data);
   return data;
+};
+
+export const getAllBusinesses = async (supabase) => {
+  const { data, error } = await supabase
+    .from("negocios")
+    .select("*", { count: "exact" })
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    console.error("Error al obtener todos los negocios:", error);
+    return [];
+  }
+
+  return data;
+};
+
+export const deleteBusiness = async (supabase, businessId) => {
+  console.log("🗑 Eliminando definitivamente negocio con ID:", businessId);
+  const { error } = await supabase
+    .from("negocios")
+    .delete()
+    .eq("id", businessId);
+
+  if (error) {
+    console.error("Error al hacer hard delete:", error);
+    throw error;
+  }
+
+  console.log("✅ Negocio eliminado completamente de la base de datos.");
 };

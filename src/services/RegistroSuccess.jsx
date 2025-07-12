@@ -39,6 +39,38 @@ const RegistroSuccess = () => {
       }
     };
 
+    const registrarNegocioEnSupabase = async (data) => {
+      try {
+        const { createClient } = await import("@supabase/supabase-js");
+        const supabase = createClient(
+          import.meta.env.VITE_SUPABASE_URL,
+          import.meta.env.VITE_SUPABASE_KEY
+        );
+
+        const { data: supabaseData, error } = await supabase
+          .from("negocios")
+          .insert([
+            {
+              nombre: data.additional_info?.payer?.first_name || "Negocio test",
+              pago_id: data.id,
+              email: data.payer?.email || "",
+              plan: data.additional_info?.items?.[0]?.title
+                ?.toLowerCase()
+                .includes("premium")
+                ? "premium"
+                : "pro",
+              monto: data.transaction_amount || 0,
+              status_pago: data.status,
+            },
+          ]);
+
+        if (error) throw error;
+        console.log("Negocio registrado en Supabase:", supabaseData);
+      } catch (error) {
+        console.error("Error al registrar en Supabase:", error);
+      }
+    };
+
     checkPaymentStatus();
   }, [searchParams]);
 
@@ -52,37 +84,6 @@ const RegistroSuccess = () => {
       )}
     </div>
   );
-};
-
-const registrarNegocioEnSupabase = async (data) => {
-  try {
-    const { createClient } = await import("@supabase/supabase-js");
-    const supabase = createClient(
-      import.meta.env.VITE_SUPABASE_URL,
-      import.meta.env.VITE_SUPABASE_KEY
-    );
-
-    const { data: supabaseData, error } = await supabase
-      .from("negocios")
-      .insert([
-        {
-          nombre: data.additional_info?.payer?.first_name || "Negocio test",
-          pago_id: data.id,
-          email: data.payer?.email || "",
-          plan:
-            data.additional_info?.items?.[0]?.title
-              ?.split(" ")[1]
-              ?.toLowerCase() || "pro",
-          monto: data.transaction_amount || 0,
-          status_pago: data.status,
-        },
-      ]);
-
-    if (error) throw error;
-    console.log("Negocio registrado en Supabase:", supabaseData);
-  } catch (error) {
-    console.error("Error al registrar en Supabase:", error);
-  }
 };
 
 export default RegistroSuccess;

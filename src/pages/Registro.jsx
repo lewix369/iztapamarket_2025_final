@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { createPreference } from "@/services/createPreference";
+import RegisterBusinessPage from "@/components/RegisterBusinessPage";
 
 const Registro = () => {
   const [searchParams] = useSearchParams();
@@ -21,47 +22,45 @@ const Registro = () => {
   }, [plan]);
 
   return (
-    <main className="flex flex-col items-center justify-center min-h-screen p-10">
-      <h1 className="text-3xl font-bold mb-4">Registro de Plan: {plan}</h1>
+    <main className="flex flex-col items-center justify-center min-h-screen p-6">
+      <h1 className="text-3xl font-bold mb-4 text-center capitalize">
+        Registro de Plan: {plan}
+      </h1>
 
-      {plan === "free" ? (
+      {plan === "free" && (
         <>
-          <p className="text-gray-600 mb-4">
-            Este plan no requiere pago. Continúa con el registro.
+          <p className="mb-4 text-gray-700 text-center">
+            Completa el siguiente formulario para registrar tu negocio con el
+            plan gratuito.
           </p>
-          <a
-            href="/registro-confirmado?plan=free"
-            className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg text-lg"
-          >
-            Ir al formulario
-          </a>
+          <div className="w-full max-w-4xl border p-4 rounded-md shadow-md bg-white">
+            <RegisterBusinessPage plan="free" />
+          </div>
         </>
-      ) : (plan === "pro" || plan === "premium") && mpUrl ? (
+      )}
+
+      {(plan === "pro" || plan === "premium") && (
         <>
-          <p className="text-gray-700 mb-4">
-            Haz clic en el botón para completar tu pago. Una vez realizado,
-            serás redirigido al formulario.
-          </p>
-          <a
-            href={mpUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-lg text-lg"
-          >
-            Ir a pagar con Mercado Pago
-          </a>
-          <p className="text-sm text-gray-500 mt-2">
-            Una vez que hayas realizado el pago, continúa el registro aquí:{" "}
+          {mpUrl ? (
             <a
-              href={`/registro-confirmado?plan=${plan}`}
-              className="text-blue-600 underline"
+              href={mpUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition"
             >
-              Ir al formulario
+              Ir al pago de Mercado Pago
             </a>
-          </p>
+          ) : (
+            <p className="text-gray-500">Generando enlace de pago...</p>
+          )}
         </>
-      ) : (
-        <p className="text-red-500">Plan no válido.</p>
+      )}
+
+      {!plan && (
+        <p className="text-red-600 mt-4">
+          ❌ No se especificó un plan válido. Usa <code>?plan=free</code>,{" "}
+          <code>?plan=pro</code> o <code>?plan=premium</code>.
+        </p>
       )}
     </main>
   );

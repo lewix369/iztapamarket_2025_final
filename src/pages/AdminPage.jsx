@@ -35,6 +35,27 @@ import BusinessForm from "@/components/admin/BusinessForm";
 import AdminBusinessTable from "@/components/admin/AdminBusinessTable";
 
 const AdminPage = () => {
+  const [authorized, setAuthorized] = useState(false); // 🔒 Protección por clave
+
+  useEffect(() => {
+    if (import.meta.env.PROD) {
+      const clave = localStorage.getItem("admin_access");
+      if (clave === "soyadmin2025") {
+        setAuthorized(true);
+      } else {
+        const input = prompt("🔒 Área protegida. Ingresa tu clave:");
+        if (input === "soyadmin2025") {
+          localStorage.setItem("admin_access", "soyadmin2025");
+          setAuthorized(true);
+        } else {
+          window.location.href = "/";
+        }
+      }
+    } else {
+      setAuthorized(true); // 🔓 En desarrollo permite acceso directo
+    }
+  }, []);
+
   const [allBusinesses, setAllBusinesses] = useState([]);
   const [filteredBusinesses, setFilteredBusinesses] = useState([]);
   const [searchTerm, setSearchTerm] = useState("");
@@ -48,9 +69,9 @@ const AdminPage = () => {
 
   const planOptions = [
     { value: "all", label: "Todos los planes" },
-    { value: "Premium", label: "Premium" },
-    { value: "Pro", label: "Profesional" },
-    { value: "Free", label: "Gratis" },
+    { value: "premium", label: "Premium" },
+    { value: "pro", label: "Profesional" },
+    { value: "free", label: "Gratis" },
   ];
 
   const statusOptions = [
@@ -58,15 +79,17 @@ const AdminPage = () => {
     { value: "approved", label: "Aprobado" },
     { value: "pending", label: "Pendiente" },
     { value: "rejected", label: "Rechazado" },
+    { value: "eliminado", label: "Eliminado" }, // nuevo estado
   ];
 
   const loadInitialData = useCallback(async () => {
-    const [allBusinessesData, categoriesData] = await Promise.all([
+    const [allBusinessesDataRaw, categoriesData] = await Promise.all([
       fetchAllBusinesses(supabase),
       getDistinctCategories(supabase),
     ]);
+    const allBusinessesData = allBusinessesDataRaw;
     setAllBusinesses(allBusinessesData);
-    setAllCategories(["all", ...categoriesData]);
+    setAllCategories(["all", ...Array.from(new Set(categoriesData))]);
   }, []);
 
   useEffect(() => {
@@ -87,26 +110,43 @@ const AdminPage = () => {
 
     if (selectedCategoryFilter !== "all") {
       businessesToFilter = businessesToFilter.filter(
-        (business) => business.categoria === selectedCategoryFilter
+        (business) =>
+          business.categoria?.toLowerCase().trim() ===
+          selectedCategoryFilter.toLowerCase().trim()
       );
     }
 
     if (selectedPlanFilter !== "all") {
       businessesToFilter = businessesToFilter.filter(
-        (business) => business.plan_type === selectedPlanFilter
+        (business) =>
+          business.plan_type?.toLowerCase().trim() ===
+          selectedPlanFilter.toLowerCase().trim()
       );
     }
 
-    if (selectedStatusFilter !== "all") {
-      businessesToFilter = businessesToFilter.filter((business) => {
-        if (selectedStatusFilter === "approved")
-          return business.is_approved === true;
-        if (selectedStatusFilter === "rejected")
-          return business.is_approved === false;
-        if (selectedStatusFilter === "pending")
-          return business.is_approved === null;
-        return true;
-      });
+    if (selectedStatusFilter === "approved") {
+      businessesToFilter = businessesToFilter.filter(
+        (business) =>
+          business.is_approved === true && business.is_deleted !== true
+      );
+    } else if (selectedStatusFilter === "rejected") {
+      businessesToFilter = businessesToFilter.filter(
+        (business) =>
+          business.is_approved === false && business.is_deleted !== true
+      );
+    } else if (selectedStatusFilter === "pending") {
+      businessesToFilter = businessesToFilter.filter(
+        (business) =>
+          business.is_approved === null && business.is_deleted !== true
+      );
+    } else if (selectedStatusFilter === "eliminado") {
+      businessesToFilter = businessesToFilter.filter(
+        (business) => business.is_deleted === true
+      );
+    } else {
+      businessesToFilter = businessesToFilter.filter(
+        (business) => business.is_deleted !== true
+      );
     }
 
     setFilteredBusinesses(businessesToFilter);
@@ -120,11 +160,12 @@ const AdminPage = () => {
 
   useEffect(() => {
     applyFilters();
-  }, [applyFilters]);
+  }, [applyFilters, allBusinesses]); // agregar allBusinesses
 
   const refreshData = async () => {
     await loadInitialData();
-    applyFilters();
+    setSearchTerm(""); // Reinicia búsqueda para ver cambios
+    setSelectedStatusFilter("all"); // Reinicia filtro para ver todo
   };
 
   const handleFormSubmit = async (formData) => {
@@ -162,37 +203,56 @@ const AdminPage = () => {
   };
 
   const handleApprove = async (id) => {
-    await updateApprovalStatus(supabase, id, true);
+    console.log("Aprobando negocio ID:", id);
+    const result = await updateApprovalStatus(supabase, id, true);
+    console.log("Resultado:", result);
     toast({
       title: "✅ Aprobado",
       description: "El negocio ha sido aprobado.",
     });
-    await refreshData();
+    await loadInitialData();
   };
 
   const handleReject = async (id) => {
-    await updateApprovalStatus(supabase, id, false);
+    console.log("Rechazando negocio ID:", id);
+    const result = await updateApprovalStatus(supabase, id, false);
+    console.log("Resultado:", result);
     toast({
       title: "⚠️ Rechazado",
       description: "El negocio ha sido marcado como rechazado.",
     });
-    await refreshData();
+    await loadInitialData();
   };
 
   const handleSoftDelete = async (id) => {
     if (
       window.confirm(
-        "¿Estás seguro de que quieres eliminar este negocio? Esta acción es reversible."
+        "¿Estás seguro de que quieres ELIMINAR PERMANENTEMENTE este negocio? Esta acción no se puede deshacer."
       )
     ) {
-      await softDeleteBusiness(supabase, id);
+      console.log("Eliminando negocio ID:", id);
+      const { error } = await supabase.from("negocios").delete().eq("id", id);
+
+      if (error) {
+        toast({
+          title: "❌ Error",
+          description: "No se pudo eliminar el negocio.",
+          variant: "destructive",
+        });
+        return;
+      }
+
       toast({
-        title: "🗑️ Eliminado",
-        description: "El negocio ha sido movido a la papelera.",
+        title: "🗑️ Eliminado permanentemente",
+        description: "El negocio ha sido eliminado de la base de datos.",
       });
-      await refreshData();
+
+      await loadInitialData();
+      applyFilters();
     }
   };
+
+  if (!authorized) return null; // 🔐 Oculta todo si no está autorizado
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -225,7 +285,12 @@ const AdminPage = () => {
           </div>
         </motion.div>
 
-        <AdminStats businesses={allBusinesses} />
+        <AdminStats
+          businesses={allBusinesses.map((biz) => ({
+            ...biz,
+            plan_type: biz.plan_type?.toLowerCase().trim(),
+          }))}
+        />
 
         <Card className="mt-8">
           <CardContent className="p-6">

@@ -1,31 +1,56 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { motion } from "framer-motion";
 import { Menu, X, Store, User, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { supabase } from "@/lib/supabaseClient";
 import { useToast } from "@/components/ui/use-toast";
+import { useSession } from "@/contexts/SessionContext";
 
 const Header = () => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const location = useLocation();
   const { toast } = useToast();
 
-  const handleAuthClick = () => {
-    toast({
-      title: "🚧 Esta función no está implementada aún",
-      description:
-        "¡Pero no te preocupes! ¡Puedes solicitarla en tu próximo prompt! 🚀",
-    });
+  const { user } = useSession();
+  const isAdmin =
+    user?.email?.toLowerCase() === "luis.carrillo.laguna@gmail.com" &&
+    (import.meta.env.DEV || import.meta.env.VITE_SHOW_ADMIN === "true");
+
+  const [deferredPrompt, setDeferredPrompt] = useState(null);
+
+  useEffect(() => {
+    const handler = (e) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+    };
+    window.addEventListener("beforeinstallprompt", handler);
+    return () => window.removeEventListener("beforeinstallprompt", handler);
+  }, []);
+
+  const handleInstallClick = () => {
+    if (deferredPrompt) {
+      deferredPrompt.prompt();
+      deferredPrompt.userChoice.then((choiceResult) => {
+        if (choiceResult.outcome === "accepted") {
+          console.log("Usuario aceptó instalar la app");
+        } else {
+          console.log("Usuario canceló la instalación");
+        }
+        setDeferredPrompt(null);
+      });
+    } else {
+      toast({
+        title: "ℹ️ Cómo instalar IztapaMarket",
+        description:
+          "Desde tu navegador, selecciona 'Agregar a pantalla de inicio'.",
+      });
+    }
   };
 
   const isActive = (path) => location.pathname === path;
 
   return (
-    <motion.header
-      initial={{ y: -100 }}
-      animate={{ y: 0 }}
-      className="sticky top-0 z-50 w-full border-b bg-white/80 backdrop-blur-md shadow-lg"
-    >
+    <header className="sticky top-0 z-50 w-full border-b bg-white/80 backdrop-blur-md shadow-lg">
       <div className="max-w-7xl mx-auto px-4">
         <div className="flex h-16 items-center justify-between">
           <Link to="/" className="flex items-center gap-2">
@@ -38,7 +63,6 @@ const Header = () => {
             </span>
           </Link>
 
-          {/* Navegación en escritorio */}
           <nav className="hidden md:flex items-center gap-6">
             <Link
               to="/"
@@ -66,25 +90,45 @@ const Header = () => {
             </Link>
           </nav>
 
-          {/* Botones escritorio */}
           <div className="hidden md:flex items-center gap-3">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleAuthClick}
-              className="text-gray-700 hover:text-blue-600"
-            >
-              <User className="h-4 w-4 mr-2" /> Ingresar
-            </Button>
-            <Link to="/admin">
+            {user ? (
               <Button
-                variant="outline"
+                variant="ghost"
                 size="sm"
-                className="border-blue-200 text-blue-600 hover:bg-blue-50"
+                onClick={async () => {
+                  const { error } = await supabase.auth.signOut();
+                  if (!error) {
+                    window.location.href = "/";
+                  }
+                }}
+                className="text-gray-700 hover:text-red-600"
               >
-                <Settings className="h-4 w-4 mr-2" /> Admin
+                <User className="h-4 w-4 mr-2" /> Cerrar sesión
               </Button>
-            </Link>
+            ) : (
+              <Link to="/login">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-gray-700 hover:text-blue-600"
+                >
+                  <User className="h-4 w-4 mr-2" /> Ingresar
+                </Button>
+              </Link>
+            )}
+
+            {isAdmin && (
+              <Link to="/admin">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-blue-200 text-blue-600 hover:bg-blue-50"
+                >
+                  <Settings className="h-4 w-4 mr-2" /> Admin
+                </Button>
+              </Link>
+            )}
+
             <Link to="/registro/free">
               <Button
                 size="sm"
@@ -93,9 +137,17 @@ const Header = () => {
                 Registrar Negocio
               </Button>
             </Link>
+
+            <Link to="/descargar">
+              <Button
+                size="sm"
+                className="bg-blue-600 hover:bg-blue-700 text-white"
+              >
+                Descargar App
+              </Button>
+            </Link>
           </div>
 
-          {/* Botón menú móvil */}
           <Button
             variant="ghost"
             size="sm"
@@ -110,22 +162,19 @@ const Header = () => {
           </Button>
         </div>
 
-        {/* Menú móvil */}
         {isMenuOpen && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            exit={{ opacity: 0, height: 0 }}
-            className="md:hidden border-t bg-white/95 backdrop-blur-md"
-          >
+          <div className="md:hidden border-t bg-white/95 backdrop-blur-md">
             <div className="px-4 py-6 space-y-4">
               <nav className="space-y-2">
                 {[
                   { path: "/", label: "Inicio" },
                   { path: "/negocios", label: "Negocios" },
                   { path: "/planes", label: "Planes" },
-                  { path: "/admin", label: "Panel Admin" },
+                  ...(isAdmin
+                    ? [{ path: "/admin", label: "Panel Admin" }]
+                    : []),
                   { path: "/registro/free", label: "Registrar Negocio" },
+                  { path: "/descargar", label: "Descargar App" },
                 ].map(({ path, label }) => (
                   <Link
                     key={path}
@@ -143,20 +192,34 @@ const Header = () => {
                   </Link>
                 ))}
               </nav>
+
               <div className="pt-4 border-t">
-                <Button
-                  variant="outline"
-                  className="w-full justify-start"
-                  onClick={handleAuthClick}
-                >
-                  <User className="h-4 w-4 mr-2" /> Ingresar
-                </Button>
+                {user ? (
+                  <Button
+                    variant="outline"
+                    className="w-full justify-start text-red-600"
+                    onClick={async () => {
+                      const { error } = await supabase.auth.signOut();
+                      if (!error) {
+                        window.location.href = "/";
+                      }
+                    }}
+                  >
+                    <User className="h-4 w-4 mr-2" /> Cerrar sesión
+                  </Button>
+                ) : (
+                  <Link to="/login">
+                    <Button variant="outline" className="w-full justify-start">
+                      <User className="h-4 w-4 mr-2" /> Ingresar
+                    </Button>
+                  </Link>
+                )}
               </div>
             </div>
-          </motion.div>
+          </div>
         )}
       </div>
-    </motion.header>
+    </header>
   );
 };
 

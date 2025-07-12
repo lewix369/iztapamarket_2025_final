@@ -2,10 +2,15 @@
   "name": "IztapaMarket - Directorio de Negocios",
   "short_name": "IztapaMarket",
   "description": "Encuentra los mejores negocios locales en Iztapa, CDMX. Servicios, productos y más.",
-  "start_url": "/",
+  "start_url": "/?source=pwa",
+  "scope": "/",
   "display": "standalone",
+  "display_override": ["standalone", "browser"],
+  "orientation": "portrait",
+  "lang": "es-MX",
   "theme_color": "#003366",
   "background_color": "#ffffff",
+  "prefer_related_applications": false,
   "icons": [
     {
       "src": "/icon-192.png",
@@ -16,6 +21,17 @@
       "src": "/icon-512.png",
       "sizes": "512x512",
       "type": "image/png"
+    },
+    {
+      "src": "/favicon-96x96.png",
+      "sizes": "96x96",
+      "type": "image/png"
+    },
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any maskable"
     }
   ]
 }

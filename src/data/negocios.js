@@ -87,6 +87,33 @@ export const negociosData = [
     slug: "estetica-bella-vista",
     is_deleted: false,
   },
+  {
+    id: 10,
+    nombre: "Panadería La Delicia",
+    descripcion:
+      "Pan recién horneado todos los días, con recetas tradicionales mexicanas.",
+    categoria: "Alimentos y Bebidas",
+    slug_categoria: "alimentos-y-bebidas",
+    telefono: "55-9123-4567",
+    direccion: "Calle Morelos 321, Col. El Molino",
+    imagen_url:
+      "https://images.unsplash.com/photo-1606811841689-23dfddce3e95?w=800",
+    mapa_embed_url: "",
+    menu: "",
+    instagram: "",
+    facebook: "",
+    hours: "Lunes a Domingo: 6:00 AM - 9:00 PM",
+    services: ["Pan dulce", "Pan de sal", "Café", "Repostería"],
+    plan_type: "free",
+    video_embed_url: "",
+    is_featured: false,
+    whatsapp: "5559123456",
+    logo_url: "",
+    web: "",
+    gallery_images: [],
+    slug: "panaderia-la-delicia",
+    is_deleted: false,
+  },
 
   // Plan Profesional
   {
@@ -334,6 +361,13 @@ export const negociosData = [
 
 export const categorias = [
   {
+    nombre: "Alimentos y Bebidas",
+    slug: "alimentos-y-bebidas",
+    descripcion: "Comida, bebidas, panaderías y más sabores locales",
+    icono: "🍔",
+    color: "from-orange-500 to-yellow-500",
+  },
+  {
     nombre: "Restaurantes",
     slug: "restaurantes",
     descripcion: "Descubre los mejores sabores de Iztapalapa",
@@ -374,6 +408,13 @@ export const categorias = [
     descripcion: "Talleres y servicios para vehículos",
     icono: "🚗",
     color: "from-gray-500 to-slate-500",
+  },
+  {
+    nombre: "Moda y Tiendas",
+    slug: "moda-y-tiendas",
+    descripcion: "Ropa, accesorios y tiendas de moda",
+    icono: "🛍️",
+    color: "from-purple-500 to-pink-400",
   },
 ];
 

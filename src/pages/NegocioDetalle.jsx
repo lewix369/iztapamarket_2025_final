@@ -1,4 +1,6 @@
 import React from "react";
+import { useState, useEffect } from "react";
+import { supabase } from "@/lib/supabaseClient";
 import { useParams, Link } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
@@ -27,6 +29,31 @@ const NegocioDetalle = () => {
   const { slug } = useParams();
   const { toast } = useToast();
   const negocio = getNegocioPorSlug(slug);
+  const [promociones, setPromociones] = useState([]);
+
+  useEffect(() => {
+    const fetchPromociones = async () => {
+      if (!negocio?.id) return;
+
+      const today = new Date().toISOString().split("T")[0];
+
+      const { data, error } = await supabase
+        .from("promociones")
+        .select("*")
+        .eq("negocio_id", negocio.id)
+        .lte("fecha_inicio", today)
+        .gte("fecha_fin", today);
+
+      if (!error) {
+        setPromociones(data);
+        console.log("🎯 Promociones activas:", data);
+      } else {
+        console.error("❌ Error al cargar promociones:", error.message);
+      }
+    };
+
+    fetchPromociones();
+  }, [negocio]);
   if (!negocio || negocio.is_deleted) return null;
 
   const handleContactClick = (type) => {
@@ -349,6 +376,37 @@ const NegocioDetalle = () => {
                 ))}
               </div>
             </motion.div>
+          </div>
+        </section>
+      )}
+
+      {/* Promociones Especiales */}
+      {promociones.length > 0 && (
+        <section className="py-16 bg-white">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <h2 className="text-3xl font-bold text-[#003366] mb-8 text-center">
+              🎯 Promociones Especiales
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {promociones.map((promo) => (
+                <div key={promo.id} className="border rounded-xl p-4 shadow-md">
+                  <h3 className="text-xl font-semibold text-[#f97316] mb-2">
+                    {promo.titulo}
+                  </h3>
+                  <p className="text-gray-700 mb-2">{promo.descripcion}</p>
+                  {promo.imagen_url && (
+                    <img
+                      src={promo.imagen_url}
+                      alt={promo.titulo}
+                      className="rounded w-full h-48 object-cover"
+                    />
+                  )}
+                  <p className="text-xs text-gray-500 mt-2">
+                    Vigencia: {promo.fecha_inicio} a {promo.fecha_fin}
+                  </p>
+                </div>
+              ))}
+            </div>
           </div>
         </section>
       )}

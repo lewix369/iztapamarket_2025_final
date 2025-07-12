@@ -29,18 +29,35 @@ const Footer = () => {
             </div>
             <p className="text-gray-300 text-sm leading-relaxed">
               IztapaMarket: el directorio local que impulsa tu negocio.
-              Promoción, diseño y marketing digital en un solo lugar.
+              Promoción, diseño, video y marketing digital en un solo lugar.
             </p>
             <div className="flex space-x-4">
-              <div className="p-2 bg-blue-600 rounded-full hover:bg-blue-700 transition-colors cursor-pointer">
+              <a
+                href="https://www.facebook.com/share/1MY6fYQhRV/?mibextid=wwXIfr"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="p-2 bg-blue-600 rounded-full hover:bg-blue-700 transition-colors"
+              >
                 <Facebook className="h-4 w-4" />
-              </div>
+              </a>
               <div className="p-2 bg-pink-600 rounded-full hover:bg-pink-700 transition-colors cursor-pointer">
                 <Instagram className="h-4 w-4" />
               </div>
-              <div className="p-2 bg-blue-400 rounded-full hover:bg-blue-500 transition-colors cursor-pointer">
-                <Twitter className="h-4 w-4" />
-              </div>
+              <a
+                href="https://www.tiktok.com/@iztapamarket"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="p-2 bg-black rounded-full hover:bg-gray-800 transition-colors"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  fill="white"
+                  viewBox="0 0 448 512"
+                  className="h-4 w-4"
+                >
+                  <path d="M448,209.2v125.8c0,30.9-25.1,56-56,56H56c-30.9,0-56-25.1-56-56V209.2H0V176h448v33.2H448z M233.7,103.5l-38.6,49.4h38.6V103.5z M368,320c0,52.9-43.1,96-96,96s-96-43.1-96-96s43.1-96,96-96S368,267.1,368,320z" />
+                </svg>
+              </a>
             </div>
           </motion.div>
 
@@ -130,12 +147,12 @@ const Footer = () => {
               </div>
               <div className="flex items-center space-x-3">
                 <Phone className="h-4 w-4 text-orange-500 flex-shrink-0" />
-                <span className="text-gray-300 text-sm">+502 1234-5678</span>
+                <span className="text-gray-300 text-sm">+52 55 3069 8200</span>
               </div>
               <div className="flex items-center space-x-3">
                 <Mail className="h-4 w-4 text-orange-500 flex-shrink-0" />
                 <span className="text-gray-300 text-sm">
-                  info@iztapamarket.com
+                  contacto@iztapamarket.com
                 </span>
               </div>
             </div>
@@ -152,18 +169,28 @@ const Footer = () => {
         >
           <div className="flex flex-col md:flex-row justify-between items-center space-y-4 md:space-y-0">
             <p className="text-gray-400 text-sm">
-              © 2024 IztapaMarket. Todos los derechos reservados.
+              © {new Date().getFullYear()} IztapaMarket™. Todos los derechos
+              reservados.
             </p>
             <div className="flex space-x-6 text-sm">
-              <span className="text-gray-400 hover:text-white transition-colors cursor-pointer">
+              <Link
+                to="/terminos"
+                className="text-gray-400 hover:text-white transition-colors"
+              >
                 Términos de Uso
-              </span>
-              <span className="text-gray-400 hover:text-white transition-colors cursor-pointer">
+              </Link>
+              <Link
+                to="/privacidad"
+                className="text-gray-400 hover:text-white transition-colors"
+              >
                 Política de Privacidad
-              </span>
-              <span className="text-gray-400 hover:text-white transition-colors cursor-pointer">
+              </Link>
+              <Link
+                to="/soporte"
+                className="text-gray-400 hover:text-white transition-colors"
+              >
                 Soporte
-              </span>
+              </Link>
             </div>
           </div>
         </motion.div>
