@@ -2,8 +2,14 @@
 import React from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { useEffect } from "react";
+import { toast } from "react-hot-toast";
 
 const RegistroFreeSuccess = () => {
+  useEffect(() => {
+    toast.success("¡Registro exitoso! Revisa tu publicación pronto.");
+  }, []);
+
   return (
     <main className="flex-grow flex flex-col items-center justify-center px-4 py-10 text-center">
       <h1 className="text-3xl md:text-4xl font-bold text-green-600 mb-6">
@@ -22,4 +28,5 @@ const RegistroFreeSuccess = () => {
   );
 };
 
+// Esta página es usada únicamente para el plan Free. No requiere lógica de pago.
 export default RegistroFreeSuccess;

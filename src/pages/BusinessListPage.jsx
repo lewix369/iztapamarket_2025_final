@@ -1,3 +1,4 @@
+// src/pages/BusinessListPage.jsx
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { Helmet } from "react-helmet";
 import { Link, useNavigate, useLocation } from "react-router-dom";
@@ -20,12 +21,47 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+
 import {
   searchBusinesses as fetchBusinessesFromDb,
   getDistinctCategories,
 } from "@/lib/database";
 import { supabase } from "@/lib/supabaseClient";
 
+// ---------- util imágenes ----------
+const pickImage = (b) =>
+  b?.imagen_url ||
+  b?.cover_image_url ||
+  b?.portada_url ||
+  b?.business_cover_url ||
+  b?.logo_url ||
+  b?.image_url ||
+  "https://images.unsplash.com/photo-1613243555978-636c48dc653c";
+
+// ---------- helpers ubicación ----------
+const toFloat = (v) =>
+  v === null || v === undefined || v === "" ? null : parseFloat(v);
+
+const getLatLng = (b) => {
+  const lat = toFloat(b?.lat ?? b?.latitud);
+  const lng = toFloat(b?.lng ?? b?.longitud);
+  return Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null;
+};
+
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+// ---------- querystring ----------
 function useQueryString() {
   const { search } = useLocation();
   return useMemo(() => new URLSearchParams(search), [search]);
@@ -49,6 +85,10 @@ const BusinessListPage = () => {
   );
 
   const [viewMode, setViewMode] = useState("grid");
+  const [userLoc, setUserLoc] = useState(null); // {lat, lng}
+  const [sortMode, setSortMode] = useState(
+    locationQuery.get("sort") || "default"
+  ); // "default" | "nearby"
 
   const planOptions = useMemo(
     () => [
@@ -60,8 +100,18 @@ const BusinessListPage = () => {
     []
   );
 
+  const labelize = (s) =>
+    s
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/-/g, " ")
+      .toLowerCase()
+      .replace(/\b\w/g, (l) => l.toUpperCase());
+
+  // ---------- carga principal (respeta filtros actuales) ----------
   const loadInitialData = useCallback(async () => {
     setIsLoading(true);
+
     const termToFetch =
       searchTerm.trim() === "" ? undefined : searchTerm.trim();
     const planValueToFetch =
@@ -78,20 +128,41 @@ const BusinessListPage = () => {
       ),
       getDistinctCategories(supabase),
     ]);
-    setBusinesses(businessData);
+
+    // 🔒 BLINDAJE EN CLIENTE: sólo mostrar aprobados y no eliminados
+    const sanitized = (businessData || []).filter(
+      (b) => b?.is_approved === true && b?.is_deleted !== true
+    );
+
+    setBusinesses(sanitized);
+
+    const rawCats = (Array.isArray(categoriesData) ? categoriesData : []).map(
+      (c) => {
+        if (typeof c === "string") return c;
+        if (c && typeof c === "object") {
+          return c.categoria ?? c.slug_categoria ?? "";
+        }
+        return "";
+      }
+    );
 
     const uniqueCategories = [
-      ...new Set(["all", ...categoriesData.map((cat) => cat || "all")]),
+      "all",
+      ...Array.from(
+        new Set(rawCats.map((c) => c.trim().toLowerCase()).filter(Boolean))
+      ),
     ];
     setCategories(uniqueCategories);
 
     setIsLoading(false);
   }, [searchTerm, selectedPlan, selectedCategory]);
 
+  // Carga inicial
   useEffect(() => {
     loadInitialData();
   }, [loadInitialData]);
 
+  // ---------- URL <-> estado ----------
   useEffect(() => {
     const params = new URLSearchParams();
     if (searchTerm.trim()) params.set("q", searchTerm.trim());
@@ -99,51 +170,104 @@ const BusinessListPage = () => {
       params.set("plan", selectedPlan);
     if (selectedCategory && selectedCategory !== "all")
       params.set("category", selectedCategory);
+    if (sortMode === "nearby") params.set("sort", "nearby");
 
     const queryString = params.toString();
+    const current = `${reactRouterLocation.pathname}${reactRouterLocation.search}`;
+    const target = queryString ? `/negocios?${queryString}` : `/negocios`;
 
-    if (queryString) {
-      if (
-        `/negocios?${queryString}` !==
-        `${reactRouterLocation.pathname}${reactRouterLocation.search}`
-      ) {
-        navigate(`/negocios?${queryString}`, { replace: true });
-      }
-    } else {
-      if (
-        `/negocios` !==
-        `${reactRouterLocation.pathname}${reactRouterLocation.search}`
-      ) {
-        navigate("/negocios", { replace: true });
-      }
-    }
+    if (current !== target) navigate(target, { replace: true });
   }, [
     searchTerm,
     selectedPlan,
     selectedCategory,
+    sortMode,
     navigate,
     reactRouterLocation,
   ]);
 
+  // ---------- 🔴 Realtime: refresca cuando admin cambia negocios ----------
+  useEffect(() => {
+    let t = null;
+    const channel = supabase
+      .channel("negocios-public-realtime")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "negocios" },
+        () => {
+          clearTimeout(t);
+          t = setTimeout(() => {
+            loadInitialData();
+          }, 250);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      clearTimeout(t);
+      supabase.removeChannel(channel);
+    };
+  }, [loadInitialData]);
+
+  // ---------- acciones UI ----------
   const handleSearchSubmit = (e) => {
     e.preventDefault();
     loadInitialData();
   };
 
-  const handlePlanChange = (value) => {
-    setSelectedPlan(value || "all");
-  };
-
-  const handleCategoryChange = (value) => {
-    setSelectedCategory(value || "all");
-  };
+  const handlePlanChange = (value) => setSelectedPlan(value || "all");
+  const handleCategoryChange = (value) => setSelectedCategory(value || "all");
 
   const handleClearFilters = () => {
     setSearchTerm("");
     setSelectedPlan("all");
     setSelectedCategory("all");
+    setSortMode("default");
+    setUserLoc(null);
   };
 
+  const enableNearby = () => {
+    if (!("geolocation" in navigator)) {
+      alert("Tu navegador no permite geolocalización.");
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      ({ coords }) => {
+        setUserLoc({ lat: coords.latitude, lng: coords.longitude });
+        setSortMode("nearby");
+      },
+      (err) => {
+        console.error("Geoloc error:", err);
+        alert("No se pudo obtener tu ubicación.");
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  };
+
+  // ---------- datos listos para pintar (con distancia/orden por cercanía) ----------
+  const businessesForView = useMemo(() => {
+    const withDistance = businesses.map((b) => {
+      if (userLoc) {
+        const ll = getLatLng(b);
+        const d = ll
+          ? haversineKm(userLoc.lat, userLoc.lng, ll.lat, ll.lng)
+          : null;
+        return { ...b, __distance_km: d };
+      }
+      return { ...b, __distance_km: null };
+    });
+
+    if (sortMode === "nearby" && userLoc) {
+      withDistance.sort((a, b) => {
+        const da = a.__distance_km ?? Number.POSITIVE_INFINITY;
+        const db = b.__distance_km ?? Number.POSITIVE_INFINITY;
+        return da - db;
+      });
+    }
+    return withDistance;
+  }, [businesses, userLoc, sortMode]);
+
+  // ---------- render ----------
   return (
     <div className="min-h-screen">
       <Helmet>
@@ -153,6 +277,7 @@ const BusinessListPage = () => {
           content="Explora todos los negocios registrados en Iztapalapa. Filtra por categoría, plan o nombre en IztapaMarket."
         />
       </Helmet>
+
       <section className="bg-gradient-to-r from-blue-600 to-orange-600 text-white py-16">
         <div className="container mx-auto px-4">
           <motion.div
@@ -214,12 +339,15 @@ const BusinessListPage = () => {
                   <SelectContent>
                     {categories.map((category) => (
                       <SelectItem key={category} value={category}>
-                        {category === "all" ? "Todas las categorías" : category}
+                        {category === "all"
+                          ? "Todas las categorías"
+                          : labelize(category)}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
+
               <div>
                 <label
                   htmlFor="plan-filter"
@@ -244,6 +372,7 @@ const BusinessListPage = () => {
                   </SelectContent>
                 </Select>
               </div>
+
               <div className="col-span-1 md:col-span-2 lg:col-span-1 flex items-end">
                 <Button
                   onClick={handleClearFilters}
@@ -254,9 +383,22 @@ const BusinessListPage = () => {
                   Limpiar Filtros
                 </Button>
               </div>
+
               <div className="flex items-center justify-end gap-2 col-span-1 md:col-span-2 lg:col-span-1">
+                <Button
+                  type="button"
+                  onClick={enableNearby}
+                  className={`h-10 px-3 ${
+                    sortMode === "nearby"
+                      ? "bg-orange-600 hover:bg-orange-700 text-white"
+                      : "bg-orange-500 hover:bg-orange-600 text-white"
+                  }`}
+                  title="Ordenar por negocios cercanos"
+                >
+                  Cerca de mí
+                </Button>
                 <span className="text-sm text-gray-600 whitespace-nowrap">
-                  {businesses.length} resultados
+                  {businessesForView.length} resultados
                 </span>
                 <div className="flex border rounded-lg">
                   <Button
@@ -295,7 +437,7 @@ const BusinessListPage = () => {
                 Cargando negocios...
               </h3>
             </motion.div>
-          ) : businesses.length === 0 ? (
+          ) : businessesForView.length === 0 ? (
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -320,7 +462,7 @@ const BusinessListPage = () => {
                   : "space-y-6"
               }
             >
-              {businesses.map((business, index) => (
+              {businessesForView.map((business, index) => (
                 <motion.div
                   key={business.id}
                   initial={{ opacity: 0, y: 20 }}
@@ -333,10 +475,12 @@ const BusinessListPage = () => {
                         <img
                           alt={`${business.nombre} - ${business.descripcion}`}
                           className="w-full h-48 object-cover group-hover:scale-105 transition-transform duration-300"
-                          src={
-                            business.imagen_url ||
-                            "https://images.unsplash.com/photo-1613243555978-636c48dc653c"
-                          }
+                          src={pickImage(business)}
+                          onError={(e) => {
+                            e.currentTarget.onerror = null;
+                            e.currentTarget.src =
+                              "https://images.unsplash.com/photo-1613243555978-636c48dc653c";
+                          }}
                         />
                         <div className="absolute top-4 left-4">
                           <Badge
@@ -382,6 +526,11 @@ const BusinessListPage = () => {
                             <MapPin className="h-4 w-4" />
                             <span>{business.direccion || "N/A"}</span>
                           </div>
+                          {business.__distance_km != null && (
+                            <div className="inline-flex items-center text-xs font-medium text-blue-700 bg-blue-100 px-2 py-0.5 rounded">
+                              {business.__distance_km.toFixed(1)} km
+                            </div>
+                          )}
                           <div className="flex items-center space-x-2 text-sm text-gray-500">
                             <Clock className="h-4 w-4" />
                             <span>{business.hours || "N/A"}</span>
@@ -410,10 +559,12 @@ const BusinessListPage = () => {
                           <img
                             alt={`${business.nombre} - ${business.descripcion}`}
                             className="w-full h-full object-cover"
-                            src={
-                              business.imagen_url ||
-                              "https://images.unsplash.com/photo-1613243555978-636c48dc653c"
-                            }
+                            src={pickImage(business)}
+                            onError={(e) => {
+                              e.currentTarget.onerror = null;
+                              e.currentTarget.src =
+                                "https://images.unsplash.com/photo-1613243555978-636c48dc653c";
+                            }}
                           />
                           <div className="absolute top-4 left-4">
                             <Badge
@@ -464,6 +615,11 @@ const BusinessListPage = () => {
                               <MapPin className="h-4 w-4" />
                               <span>{business.direccion || "N/A"}</span>
                             </div>
+                            {business.__distance_km != null && (
+                              <div className="inline-flex items-center text-xs font-medium text-blue-700 bg-blue-100 px-2 py-0.5 rounded">
+                                {business.__distance_km.toFixed(1)} km
+                              </div>
+                            )}
                             <div className="flex items-center space-x-2 text-sm text-gray-500">
                               <Clock className="h-4 w-4" />
                               <span>{business.hours || "N/A"}</span>

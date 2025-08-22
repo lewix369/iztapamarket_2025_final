@@ -1,644 +1,2468 @@
-import React, { useEffect, useState } from "react";
-import { useToast } from "@/components/ui/use-toast";
+import React, { useState, useEffect } from "react";
+import PromoCard from "@/components/PromoCard";
+import { useSession } from "@/contexts/SessionContext";
 import { supabase } from "@/lib/supabaseClient";
-import { useNavigate } from "react-router-dom";
+import { useToast } from "@/components/ui/use-toast";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { Mail } from "lucide-react";
-const MiNegocioPage = () => {
-  const [user, setUser] = useState(null);
+import { Upload } from "lucide-react";
+import { mapPromo } from "@/utils/mapPromo";
 
-  useEffect(() => {
-    const fetchUser = async () => {
-      const { data, error } = await supabase.auth.getUser();
-      if (data?.user) {
-        setUser(data.user);
-        console.log("✅ Usuario autenticado:", data.user);
-      } else {
-        console.warn("❌ No se encontró usuario autenticado", error);
-      }
-    };
-    fetchUser();
-  }, []);
+/* =========================
+   Utilidad: YouTube a /embed/
+   ========================= */
+const convertYouTubeUrlToEmbed = (url) => {
+  if (!url) return "";
+  const regex = /(?:youtube\.com\/watch\?v=|youtu\.be\/)([^\s&]+)/;
+  const match = url.match(regex);
+  if (match && match[1]) return `https://www.youtube.com/embed/${match[1]}`;
+  return url;
+};
+
+// UUID v4 seguro con fallback
+const uuidv4 = () => {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  // Fallback simple
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
+    const r = (Math.random() * 16) | 0,
+      v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+};
+
+const MiNegocioPage = () => {
+  const SUPPORT_URL =
+    "https://wa.me/525569006664?text=Hola%20necesito%20reactivar%20mi%20IA";
+
+  // --- Estado promos (flujo legacy breve)
+  const [promocionTitulo, setPromocionTitulo] = useState("");
+  const [promocionInicio, setPromocionInicio] = useState("");
+  const [promocionVigencia, setPromocionVigencia] = useState("");
+  const [promocionImagen, setPromocionImagen] = useState(null);
+  const [promoImagePreview, setPromoImagePreview] = useState(null);
+
+  // Galería (previews seleccionadas antes de subir)
+  const [selectedImages, setSelectedImages] = useState([]);
+  const handleGallerySelection = (event) => {
+    const files = Array.from(event.target.files);
+    const previews = files.map((file) => ({
+      file,
+      preview: URL.createObjectURL(file),
+    }));
+    setSelectedImages((prev) => [...prev, ...previews]);
+  };
+
+  // Subir galería a Storage y actualizar negocio
   const { toast } = useToast();
-  const navigate = useNavigate();
-  const [form, setForm] = useState({
+  const session = useSession();
+  const user = session?.user;
+
+  const [business, setBusiness] = useState({
+    id: "",
     nombre: "",
     descripcion: "",
+    servicios: "", // UI como string, se normaliza a array al guardar
     telefono: "",
     whatsapp: "",
     direccion: "",
+    mapa_embed_url: "",
     instagram: "",
     facebook: "",
+    tiktok: "",
     web: "",
-    latitud: "", // nuevo
-    longitud: "", // nuevo
-    plan_type: "Free",
-    promocionTitulo: "",
-    promocionDescripcion: "",
-    promocionImagenUrl: "",
-    promocionFechaInicio: "",
-    promocionFechaFin: "",
+    portada_url: "",
+    logo_url: "",
+    video_url: "",
+    palabras_clave: "",
+    menu: "",
+    gallery_images: [],
   });
-  const [negocioId, setNegocioId] = useState(null);
 
-  const [isSaving, setIsSaving] = useState(false);
-  const [wasSaved, setWasSaved] = useState(false);
+  const handleUploadGallery = async () => {
+    if (!business?.id || selectedImages.length === 0) return;
+    try {
+      const uploadedUrls = [];
+      for (const img of selectedImages) {
+        const fileExt = img.file.name.split(".").pop();
+        const fileName = `${Date.now()}-${Math.random()}.${fileExt}`;
+        const { error: uploadError } = await supabase.storage
+          .from("negocios")
+          .upload(`gallery/${fileName}`, img.file);
+        if (uploadError) throw uploadError;
 
+        const {
+          data: { publicUrl },
+        } = supabase.storage
+          .from("negocios")
+          .getPublicUrl(`gallery/${fileName}`);
+
+        uploadedUrls.push(publicUrl);
+      }
+
+      const updatedGallery = [
+        ...(business.gallery_images || []),
+        ...uploadedUrls,
+      ];
+      const { error: updateError } = await supabase
+        .from("negocios")
+        .update({ gallery_images: updatedGallery })
+        .eq("id", business.id);
+      if (updateError) throw updateError;
+
+      setBusiness((prev) => ({ ...prev, gallery_images: updatedGallery }));
+      setSelectedImages([]);
+      toast({ title: "Imágenes de galería guardadas correctamente." });
+    } catch (error) {
+      console.error("Error al subir galería:", error.message);
+      toast({
+        title: "Error al subir galería",
+        description: error.message,
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Flags y estados IA
+  const isPremiumPlan = (business?.plan_type || "").toLowerCase() === "premium";
+  const [aiCoverPrompt, setAiCoverPrompt] = useState("");
+  const [aiLogoPrompt, setAiLogoPrompt] = useState("");
+  const [loadingCover, setLoadingCover] = useState(false);
+  const [loadingLogo, setLoadingLogo] = useState(false);
+  const [useSimpleCover, setUseSimpleCover] = useState(true);
+  const [useSimpleLogo, setUseSimpleLogo] = useState(true);
+
+  // Campos simples para IA
+  const [coverStyle, setCoverStyle] = useState("Moderno");
+  const [coverLight, setCoverLight] = useState("Natural");
+  const [coverColors, setCoverColors] = useState("");
+  const [coverElements, setCoverElements] = useState("");
+  const [logoType, setLogoType] = useState("Isotipo");
+  const [logoIcon, setLogoIcon] = useState("");
+  const [logoShape, setLogoShape] = useState("Circular");
+  const [logoColors, setLogoColors] = useState("");
+  const [logoBg, setLogoBg] = useState("Transparente");
+  const [logoDetail, setLogoDetail] = useState("Minimalista");
+  const [selectedCoverPreset, setSelectedCoverPreset] = useState("");
+  const [selectedLogoPreset, setSelectedLogoPreset] = useState("");
+
+  const portadaEjemplos = [
+    {
+      label: "Portada Tradicional",
+      prompt:
+        "Banner horizontal fotográfico para negocio de comida mexicana, mesa rústica con tortillas, guacamole y aguas frescas de colores vivos. Fondo cálido, estilo acogedor, iluminación natural, alta resolución.",
+    },
+    {
+      label: "Portada Minimalista",
+      prompt:
+        "Banner horizontal limpio y moderno para negocio de comida, plato minimalista con tortillas y guacamole, colores naranja y verde, fondo blanco liso, iluminación de estudio, enfoque en el producto.",
+    },
+    {
+      label: "Portada Estilo Gourmet",
+      prompt:
+        "Banner horizontal tipo fotografía editorial, presentación gourmet de tortillas artesanales con guacamole y jugo natural, fondo oscuro para resaltar colores, iluminación dramática y elegante.",
+    },
+  ];
+
+  const logoEjemplos = [
+    {
+      label: "Logo Tradicional Mexicano",
+      prompt:
+        "Isotipo circular con taco y guacamole, colores verde, rojo y amarillo, estilo plano, fondo transparente, diseño simple pero con identidad mexicana.",
+    },
+    {
+      label: "Logo Minimalista Moderno",
+      prompt:
+        "Isotipo minimalista con forma circular, ícono de nopal y vaso de jugo, colores negro y naranja, fondo transparente, líneas limpias y modernas.",
+    },
+    {
+      label: "Logo Creativo Ilustrado",
+      prompt:
+        "Logo circular estilo ilustración vectorial, ícono de taco con hojas de nopal y bebida, colores vibrantes (verde, naranja, crema), fondo transparente, detalles divertidos y llamativos.",
+    },
+  ];
+
+  const coverPresetsByCategory = {
+    taquería: [
+      "Foto cálida con mesa de madera, tacos al pastor, salsas y limones, luz natural",
+      "Trompo de pastor y plancha al fondo, estilo moderno, fondo desenfocado",
+      "Rústico con tortillas, guacamole y refrescos, colores naranja y verde",
+    ],
+    jugos: [
+      "Frutas frescas y vasos de jugo con hielo, fondo claro, luz natural",
+      "Barra de jugos con licuadora y vasos, estilo moderno, limpio",
+      "Close-up de naranjas, zanahorias y betabel, tonos vibrantes",
+    ],
+    barbería: [
+      "Sillón de barbero, herramientas metálicas, luz dramática, look vintage",
+      "Corte a navaja con toalla caliente, ambiente cálido",
+      "Mostrador con tijeras y peines, estilo minimalista y limpio",
+    ],
+    gimnasio: [
+      "Pesas y mancuernas en primer plano, fondo de sala de entrenamiento",
+      "Persona atando agujetas sobre piso de goma, luz de estudio",
+      "Barras y discos, estilo moderno, tonos oscuros",
+    ],
+  };
+  const logoPresetsByCategory = {
+    taquería: [
+      {
+        sample: "Isotipo minimalista de taco, fondo transparente, verde y rojo",
+        icon: "taco",
+        colors: "verde y rojo",
+      },
+      {
+        sample: "Símbolo circular con nopal, estilo plano, verde y crema",
+        icon: "nopal",
+        colors: "verde y crema",
+      },
+      {
+        sample: "Imagotipo con trompo de pastor, fondo sólido claro",
+        icon: "trompo de pastor",
+        colors: "naranja y café",
+      },
+    ],
+    jugos: [
+      {
+        sample: "Isotipo de vaso con popote y fruta, fondo transparente",
+        icon: "vaso de jugo",
+        colors: "naranja y verde",
+      },
+      {
+        sample: "Símbolo circular con naranja rebanada, estilo plano",
+        icon: "naranja rebanada",
+        colors: "naranja y blanco",
+      },
+      {
+        sample: "Imagotipo con licuadora sencilla, fondo sólido claro",
+        icon: "licuadora",
+        colors: "verde y amarillo",
+      },
+    ],
+    barbería: [
+      {
+        sample: "Isotipo de navaja barbera, fondo transparente",
+        icon: "navaja barbera",
+        colors: "negro y plata",
+      },
+      {
+        sample: "Símbolo circular con peine y tijeras, estilo plano",
+        icon: "peine y tijeras",
+        colors: "negro y dorado",
+      },
+      {
+        sample: "Imagotipo con columna de barbería, fondo sólido",
+        icon: "columna de barbería",
+        colors: "rojo, azul y blanco",
+      },
+    ],
+    gimnasio: [
+      {
+        sample: "Isotipo de mancuerna minimalista, fondo transparente",
+        icon: "mancuerna",
+        colors: "gris y negro",
+      },
+      {
+        sample: "Símbolo circular con barra y discos, estilo plano",
+        icon: "barra con discos",
+        colors: "negro y rojo",
+      },
+      {
+        sample: "Imagotipo con silueta corriendo, fondo sólido",
+        icon: "silueta corriendo",
+        colors: "azul y negro",
+      },
+    ],
+  };
+
+  const normalizeCategory = (str) => (str || "").toLowerCase().trim();
+  const currentCat = normalizeCategory(business?.categoria);
+  const coverChips =
+    coverPresetsByCategory[currentCat] || coverPresetsByCategory.taquería || [];
+  const logoChips =
+    logoPresetsByCategory[currentCat] || logoPresetsByCategory.taquería || [];
+
+  const buildCoverPrompt = () => {
+    const nombre = business?.nombre || "tu negocio";
+    const categoria = business?.categoria || "negocio local";
+    const elementos =
+      coverElements?.trim() || "productos/servicios principales";
+    const colores = coverColors?.trim() || "colores coherentes con la marca";
+    return `Banner horizontal estilo fotográfico para el negocio "${nombre}" (categoría: ${categoria}). Mostrar: ${elementos}. Estilo: ${coverStyle}. Iluminación: ${coverLight}. Colores principales: ${colores}. Composición limpia, espacio para título, sin texto dentro de la imagen. Alta resolución.`;
+  };
+
+  const buildLogoPrompt = () => {
+    const nombre = business?.nombre || "tu negocio";
+    const icono = logoIcon?.trim() || "símbolo relacionado al negocio";
+    const colores = logoColors?.trim() || "colores de marca";
+    return `Logo ${logoDetail.toLowerCase()} tipo ${logoType.toLowerCase()} para "${nombre}". Ícono principal: ${icono}. Forma: ${logoShape.toLowerCase()}. Colores: ${colores}. Fondo ${logoBg.toLowerCase()}. Estilo plano, legible incluso a 128×128, sin texto dentro del gráfico.`;
+  };
+
+  const coverPlaceholder = `Banner horizontal estilo fotográfico para el negocio “${
+    business?.nombre || "tu negocio"
+  }” (categoría: ${
+    business?.categoria || "negocio local"
+  }). Mostrar productos/servicios principales. Estilo: [cálido | moderno | rústico]. Iluminación: [natural | estudio]. Colores: [principal 1, 2]. Composición limpia, espacio para título, sin texto dentro de la imagen. Alta resolución.`;
+
+  const logoPlaceholder = `Logo [moderno | minimalista | vintage] para “${
+    business?.nombre || "tu negocio"
+  }”. Ícono: [describe el ícono principal]. Forma: [círculo | cuadrado | isotipo]. Colores: [primarios]. Fondo [transparente | sólido]. Evitar texto dentro del gráfico. Estilo plano, legible incluso a 128×128.`;
+
+  // ===== Estado Promos (nuevo flujo con tabla promociones)
   const [promociones, setPromociones] = useState([]);
-  // Nueva variable de estado para edición de promociones
-  const [promoEditandoId, setPromoEditandoId] = useState(null);
+  const [promoActiva, setPromoActiva] = useState(null);
 
-  const fetchPromos = async () => {
-    if (!negocioId) return;
+  // 🔒 control anti-doble click + UI
+  const [isSavingPromotion, setIsSavingPromotion] = useState(false);
+  const [promoSaveStep, setPromoSaveStep] = useState(""); // "Subiendo imagen…" / "Guardando…"
+  const [pendingPromoId, setPendingPromoId] = useState(null);
+
+  const [promo, setPromo] = useState({
+    titulo: "",
+    descripcion: "",
+    fecha_inicio: "",
+    fecha_fin: "",
+    imagen_file: null,
+    imagen_url: null,
+  });
+  const [previewImage, setPreviewImage] = useState(null);
+  const [modoEdicion, setModoEdicion] = useState(false);
+  const [editingPromotion, setEditingPromotion] = useState(null);
+  const [imagenActual, setImagenActual] = useState(null);
+  const [negocio, setNegocio] = useState(null);
+  const [previewUrl, setPreviewUrl] = useState(null);
+
+  const removePromoImage = () => {
+    if (promoImagePreview?.preview)
+      URL.revokeObjectURL(promoImagePreview.preview);
+    setPromoImagePreview(null);
+    setPromocionImagen(null);
+  };
+
+  const handleEliminarImagenGaleria = async (url) => {
+    const nuevasUrls = (business.gallery_images || []).filter(
+      (img) => img !== url
+    );
+    const { error } = await supabase
+      .from("negocios")
+      .update({ gallery_images: nuevasUrls })
+      .eq("id", business.id);
+    if (error) {
+      console.error("❌ Error al eliminar imagen de galería:", error.message);
+    } else {
+      setBusiness((prev) => ({ ...prev, gallery_images: nuevasUrls }));
+      toast({ title: "Imagen eliminada de la galería" });
+    }
+  };
+
+  // ------ Promos: actualizar (también con loading para evitar dobles clics)
+  const [isUpdatingPromotion, setIsUpdatingPromotion] = useState(false);
+  const actualizarPromocion = async () => {
+    if (isUpdatingPromotion) return;
+    setIsUpdatingPromotion(true);
+
+    let nuevaImagenUrl = promo.imagen_url;
+
+    if (!editingPromotion) {
+      toast({
+        title: "Error",
+        description: "No hay promoción seleccionada para editar.",
+        variant: "destructive",
+      });
+      setIsUpdatingPromotion(false);
+      return;
+    }
+
+    try {
+      if (promo.imagen_file) {
+        setPromoSaveStep("Subiendo imagen…");
+        const { data: uploadData, error: uploadError } = await supabase.storage
+          .from("promociones")
+          .upload(`imagen_${Date.now()}`, promo.imagen_file, {
+            cacheControl: "3600",
+            upsert: false,
+          });
+        if (uploadError) throw uploadError;
+
+        const { data: urlData } = supabase.storage
+          .from("promociones")
+          .getPublicUrl(uploadData.path);
+        nuevaImagenUrl = urlData.publicUrl;
+      }
+
+      setPromoSaveStep("Guardando…");
+      const { error: updateError } = await supabase
+        .from("promociones")
+        .update({
+          titulo: promo.titulo,
+          descripcion: promo.descripcion,
+          fecha_inicio: promo.fecha_inicio,
+          fecha_fin: promo.fecha_fin,
+          imagen_url: nuevaImagenUrl,
+        })
+        .eq("id", editingPromotion);
+
+      if (updateError) throw updateError;
+
+      toast({
+        title: "✅ Promoción actualizada",
+        description: "Se guardaron los cambios correctamente.",
+      });
+
+      setModoEdicion(false);
+      setEditingPromotion(null);
+      setPromo({
+        titulo: "",
+        descripcion: "",
+        fecha_inicio: "",
+        fecha_fin: "",
+        imagen_file: null,
+        imagen_url: null,
+      });
+      setPreviewImage(null);
+
+      await fetchPromocionesActivas();
+      await fetchPromociones();
+    } catch (error) {
+      console.error("❌ Error al actualizar promoción:", error.message);
+      toast({
+        title: "Error al actualizar",
+        description: error.message,
+        variant: "destructive",
+      });
+    } finally {
+      setPromoSaveStep("");
+      setIsUpdatingPromotion(false);
+    }
+  };
+
+  // Cargar negocio por user_id
+  useEffect(() => {
+    const fetchData = async () => {
+      const { data, error } = await supabase
+        .from("negocios")
+        .select("*")
+        .eq("user_id", user.id)
+        .single();
+
+      if (error) {
+        console.error("Error al obtener negocio:", error);
+      } else if (data) {
+        setBusiness({
+          id: data.id,
+          ...data,
+          servicios: Array.isArray(data.servicios)
+            ? data.servicios.join(", ")
+            : data.servicios || "",
+          video_url: data.video_embed_url || data.video_url || "",
+        });
+      }
+    };
+    if (user?.id) fetchData();
+  }, [user]);
+
+  useEffect(() => {
+    if (negocio) {
+      setBusiness({
+        id: negocio.id || "",
+        nombre: negocio.nombre || "",
+        descripcion: negocio.descripcion || "",
+        servicios: Array.isArray(negocio.servicios)
+          ? negocio.servicios.join(", ")
+          : negocio.servicios || "",
+        telefono: negocio.telefono || "",
+        whatsapp: negocio.whatsapp || "",
+        direccion: negocio.direccion || "",
+        mapa_embed_url: negocio.mapa_embed_url || "",
+        instagram: negocio.instagram || "",
+        facebook: negocio.facebook || "",
+        tiktok: negocio.tiktok || "",
+        web: negocio.web || "",
+        portada_url: negocio.portada_url || "",
+        logo_url: negocio.logo_url || "",
+        video_url: negocio.video_embed_url || negocio.video_url || "",
+        gallery_images: negocio.gallery_images || [],
+      });
+    }
+  }, [negocio]);
+
+  // Guardar cambios (update directo por user_id)
+  const handleSubmit = async () => {
+    if (!user) return null;
+    const {
+      data: { user: userObj },
+    } = await supabase.auth.getUser();
+    if (!userObj) {
+      alert("Usuario no autenticado.");
+      return;
+    }
+    if (!business.id) {
+      alert("No se encontró el ID del negocio.");
+      return;
+    }
+
+    const serviciosArrayForSave = Array.isArray(business.servicios)
+      ? business.servicios
+      : typeof business.servicios === "string"
+      ? business.servicios
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [];
+
+    const { data: updatedData, error } = await supabase
+      .from("negocios")
+      .update({
+        nombre: business.nombre || "",
+        descripcion: business.descripcion || "",
+        telefono: business.telefono || "",
+        whatsapp: business.whatsapp || "",
+        direccion: business.direccion || "",
+        mapa_embed_url: business.mapa_embed_url || "",
+        instagram: business.instagram || "",
+        facebook: business.facebook || "",
+        tiktok: business.tiktok || "",
+        web: business.web || "",
+        portada_url: business.portada_url || "",
+        logo_url: business.logo_url || "",
+        video_embed_url: business.video_embed_url || "",
+        imagen_url: business.imagen_url || "",
+        menu: business.menu || "",
+        categoria: business.categoria || "",
+        slug_categoria:
+          business.categoria || ""
+            ? (business.categoria || "").toLowerCase().replace(/\s+/g, "-")
+            : "",
+        services: Array.isArray(business.services) ? business.services : [],
+        gallery_images: Array.isArray(business.gallery_images)
+          ? business.gallery_images
+          : [],
+        email: business.email || "",
+        promocion_titulo: business.promocion_titulo || "",
+        promocion_imagen: business.promocion_imagen || "",
+        promocion_fecha: business.promocion_fecha || "",
+        plan_type: business.plan_type || "",
+        updated_at: new Date().toISOString(),
+        servicios: serviciosArrayForSave,
+      })
+      .eq("user_id", user.id)
+      .select()
+      .single();
+
+    if (error) {
+      console.error("Error al actualizar negocio:", error);
+      alert("Error al actualizar negocio.");
+      return;
+    }
+
+    setBusiness(updatedData);
+    alert("Negocio actualizado correctamente");
+  };
+
+  // Subida de portada/logo
+  const handleUpload = async (e, campo) => {
+    const file = e.target.files[0];
+    if (!file || !user) return;
+
+    const fileExt = file.name.split(".").pop();
+    const fileName = `${Date.now()}.${fileExt}`;
+    const filePath = `${user.id}/${fileName}`;
+    const bucketName = campo === "logo_url" ? "logos" : "portadas";
+
+    const { error: uploadError } = await supabase.storage
+      .from(bucketName)
+      .upload(filePath, file, { upsert: true });
+    if (uploadError) {
+      console.error("❌ Error al subir imagen:", uploadError.message);
+      return;
+    }
+
+    const { data: urlData } = supabase.storage
+      .from(bucketName)
+      .getPublicUrl(filePath);
+    const urlFinal = urlData.publicUrl;
+
+    const { error: updateError } = await supabase
+      .from("negocios")
+      .update({ [campo]: urlFinal })
+      .eq("user_id", user.id);
+
+    if (updateError) {
+      console.error(`❌ Error al actualizar ${campo}:`, updateError.message);
+    } else {
+      setBusiness((prev) => ({ ...prev, [campo]: urlFinal }));
+    }
+  };
+
+  // Eliminar portada/logo
+  const handleDeletePortada = async () => {
+    if (!business.id) return;
+    try {
+      const { error: updateError } = await supabase
+        .from("negocios")
+        .update({ portada_url: null })
+        .eq("id", business.id);
+      if (updateError) throw updateError;
+      setBusiness((prev) => ({ ...prev, portada_url: "" }));
+      toast({ title: "Portada eliminada correctamente." });
+    } catch (error) {
+      console.error("Error al eliminar la portada:", error.message);
+      toast({ title: "Error al eliminar la portada.", variant: "destructive" });
+    }
+  };
+  const handleDeleteLogo = async () => {
+    if (!business.id) return;
+    try {
+      const { error: updateError } = await supabase
+        .from("negocios")
+        .update({ logo_url: null })
+        .eq("id", business.id);
+      if (updateError) throw updateError;
+      setBusiness((prev) => ({ ...prev, logo_url: "" }));
+      toast({ title: "Logo eliminado correctamente." });
+    } catch (error) {
+      console.error("Error al eliminar el logo:", error.message);
+      toast({ title: "Error al eliminar el logo.", variant: "destructive" });
+    }
+  };
+
+  // IA descripción (Edge function)
+  const handleGenerateAI = async () => {
+    if (!business.nombre || !business.servicios) {
+      toast({
+        title: "Faltan datos",
+        description:
+          "Completa 'Nombre' y 'Servicios' antes de generar la descripción.",
+        variant: "destructive",
+      });
+      return;
+    }
+    try {
+      const { data, error } = await supabase.functions.invoke(
+        "generate-description",
+        {
+          body: {
+            nombre: business.nombre,
+            categoria: business.categoria || "negocio local",
+            servicios: business.servicios,
+          },
+        }
+      );
+
+      if (error) {
+        console.error("Edge Function error:", error);
+        toast({
+          title: "Error al generar",
+          description: error.message || "No se pudo generar la descripción.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      const descripcion = (data?.descripcion || "").trim();
+      if (!descripcion) {
+        toast({
+          title: "Error al generar",
+          description: "No se pudo generar la descripción.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      setBusiness((prev) => ({ ...prev, descripcion }));
+      toast({
+        title: "Descripción generada",
+        description: "Texto autocompletado con IA.",
+      });
+    } catch (err) {
+      console.error("Fetch error:", err);
+      toast({
+        title: "Error de comunicación",
+        description: "No se pudo contactar la función de Supabase.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // IA imágenes (Edge function)
+
+  const callImageGenerator = async (kind, prompt) => {
+    const plan = (business?.plan_type || "").toLowerCase();
+    if (!["cover", "logo"].includes(kind)) {
+      toast({
+        title: "Tipo de generación inválido",
+        description: "Tipo de generación inválido.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (plan !== "premium") {
+      toast({
+        title: "Función Premium",
+        description:
+          "La generación con IA de portada y logo solo está disponible para el Plan Premium.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (!business?.id) {
+      toast({
+        title: "Sin ID de negocio",
+        description: "No se encontró el ID del negocio.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      const payload = { businessId: business.id, kind, prompt: prompt || "" };
+
+      const { data, error } = await supabase.functions.invoke(
+        "generate-image",
+        {
+          body: payload,
+        }
+      );
+
+      if (error) {
+        throw new Error(
+          data?.error || error.message || "No se pudo generar la imagen."
+        );
+      }
+
+      if (kind === "cover") {
+        setBusiness((prev) => ({
+          ...prev,
+          portada_url: data?.url || prev.portada_url,
+        }));
+        toast({
+          title: "Portada generada",
+          description: "Se actualizó la portada del negocio.",
+        });
+      } else {
+        setBusiness((prev) => ({
+          ...prev,
+          logo_url: data?.url || prev.logo_url,
+        }));
+        toast({
+          title: "Logo generado",
+          description: "Se actualizó el logo del negocio.",
+        });
+      }
+    } catch (e) {
+      console.error("invoke(generate-image) error:", e);
+      toast({
+        title: "Error al generar imagen",
+        description:
+          e.message || "Error al comunicar con el generador de imágenes.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleGenerateCoverAI = async () => {
+    const preset = (selectedCoverPreset || "").trim();
+    const prompt = preset
+      ? preset
+      : useSimpleCover
+      ? buildCoverPrompt()
+      : (aiCoverPrompt || "").trim();
+    try {
+      setLoadingCover(true);
+      await callImageGenerator("cover", prompt);
+    } finally {
+      setLoadingCover(false);
+    }
+  };
+  const handleGenerateLogoAI = async () => {
+    const preset = (selectedLogoPreset || "").trim();
+    const prompt = preset
+      ? preset
+      : useSimpleLogo
+      ? buildLogoPrompt()
+      : (aiLogoPrompt || "").trim();
+    try {
+      setLoadingLogo(true);
+      await callImageGenerator("logo", prompt);
+    } finally {
+      setLoadingLogo(false);
+    }
+  };
+
+  // Ubicación actual
+  const handleSetCurrentLocation = () => {
+    if (!navigator.geolocation) {
+      alert("Tu navegador no soporta geolocalización.");
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const { latitude, longitude } = position.coords;
+        const embedUrl = `https://www.google.com/maps?q=${latitude},${longitude}&hl=es&z=14&output=embed`;
+        await supabase
+          .from("negocios")
+          .update({ mapa_embed_url: embedUrl })
+          .eq("id", business.id);
+        setBusiness({ ...business, mapa_embed_url: embedUrl });
+        alert("Ubicación actual guardada correctamente.");
+      },
+      (error) => {
+        if (error.code === 1) {
+          alert("Debes permitir acceso a tu ubicación.");
+        } else {
+          alert("Error al obtener la ubicación.");
+        }
+      }
+    );
+  };
+
+  // Eliminar negocio
+  const handleDeleteBusiness = async () => {
+    const confirmDelete = confirm(
+      "⚠️ ¿Estás seguro de que deseas eliminar permanentemente este negocio? Esta acción no se puede deshacer."
+    );
+    if (!confirmDelete) return;
+    const { error } = await supabase
+      .from("negocios")
+      .delete()
+      .eq("id", business.id);
+    if (!error) {
+      alert("Negocio eliminado permanentemente.");
+      window.location.href = "/negocios";
+    } else {
+      alert("Error al eliminar el negocio.");
+    }
+  };
+
+  // Guardar cambios (upsert con slug)
+  const handleSave = async () => {
+    try {
+      const { data: userData, error: userError } =
+        await supabase.auth.getUser();
+      if (userError || !userData?.user) {
+        console.error("❌ No se pudo obtener el usuario:", userError);
+        alert("No se pudo obtener el usuario.");
+        return;
+      }
+
+      const safeBusiness = {
+        ...business,
+        id: business.id ?? "",
+        categoria: business.categoria ?? "",
+      };
+
+      let slugGenerado = safeBusiness.slug;
+      if (!safeBusiness.slug || safeBusiness.slug.trim() === "") {
+        slugGenerado = safeBusiness.nombre
+          .toLowerCase()
+          .replace(/\s+/g, "-")
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "");
+      }
+
+      const serviciosArrayForSave = Array.isArray(safeBusiness.servicios)
+        ? safeBusiness.servicios
+        : typeof safeBusiness.servicios === "string"
+        ? safeBusiness.servicios
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : [];
+
+      const updates = {
+        nombre: safeBusiness.nombre || "",
+        descripcion: safeBusiness.descripcion || "",
+        servicios: serviciosArrayForSave,
+        telefono: safeBusiness.telefono || "",
+        whatsapp: safeBusiness.whatsapp || "",
+        direccion: safeBusiness.direccion || "",
+        mapa_embed_url: safeBusiness.mapa_embed_url || "",
+        instagram: safeBusiness.instagram || "",
+        facebook: safeBusiness.facebook || "",
+        tiktok: safeBusiness.tiktok || "",
+        web: safeBusiness.web || "",
+        portada_url: safeBusiness.portada_url || "",
+        logo_url: safeBusiness.logo_url || "",
+        video_embed_url: safeBusiness.video_embed_url || "",
+        promocion_imagen: safeBusiness.promocion_imagen || "",
+        promocion_titulo: safeBusiness.promocion_titulo || "",
+        promocion_fecha: safeBusiness.promocion_fecha || "",
+        visitas: safeBusiness.visitas || 0,
+        clics: safeBusiness.clics || 0,
+        categoria: safeBusiness.categoria || "",
+        slug_categoria: safeBusiness.categoria
+          ? safeBusiness.categoria.toLowerCase().replace(/\s+/g, "-")
+          : "",
+        plan_type: safeBusiness.plan_type || "free",
+        gallery_images: safeBusiness.gallery_images || [],
+        services: safeBusiness.services || [],
+        imagen_url: safeBusiness.imagen_url || "",
+        menu: safeBusiness.menu || "",
+        email: safeBusiness.email || "",
+        updated_at: new Date().toISOString(),
+      };
+
+      const { error } = await supabase
+        .from("negocios")
+        .upsert({ ...safeBusiness, ...updates, slug: slugGenerado })
+        .eq("user_id", userData.user.id)
+        .select();
+
+      if (error) {
+        console.error("❌ Error al guardar cambios:", error.message);
+        alert("No se pudieron guardar los cambios");
+      } else {
+        alert("✅ Cambios guardados exitosamente.");
+      }
+    } catch (err) {
+      console.error("❌ Error inesperado:", err);
+      alert("Ocurrió un error inesperado.");
+    }
+  };
+
+  // Update negocio (payload limpio)
+  const handleUpdateBusiness = async () => {
+    if (!user) return null;
+    const {
+      data: { user: userObj },
+    } = await supabase.auth.getUser();
+    if (!userObj) {
+      alert("Usuario no autenticado.");
+      return;
+    }
+    if (!business.id) {
+      alert("No se encontró el ID del negocio.");
+      return;
+    }
+
+    const serviciosArray = business.servicios
+      ? business.servicios
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [];
+
+    let updateObj = {
+      nombre: business.nombre,
+      descripcion: business.descripcion,
+      servicios: serviciosArray,
+      telefono: business.telefono,
+      whatsapp: business.whatsapp,
+      direccion: business.direccion,
+      mapa_embed_url: business.mapa_embed_url,
+      instagram: business.instagram,
+      facebook: business.facebook,
+      tiktok: business.tiktok,
+      web: business.web,
+      portada_url: business.portada_url,
+      logo_url: business.logo_url,
+      video_embed_url: business.video_embed_url,
+      promocion_imagen: business.promocion_imagen,
+      promocion_titulo: business.promocion_titulo,
+      promocion_fecha: business.promocion_fecha,
+      visitas: business.visitas,
+      clics: business.clics,
+      categoria: business.categoria,
+      slug_categoria: business.categoria
+        ? business.categoria.toLowerCase().replace(/\s+/g, "-")
+        : "",
+      plan_type: business.plan_type,
+      gallery_images: business.gallery_images,
+      services: business.services,
+      imagen_url: business.imagen_url,
+      menu: business.menu,
+      email: business.email,
+    };
+    Object.keys(updateObj).forEach((key) => {
+      if (updateObj[key] === undefined) delete updateObj[key];
+    });
+
+    try {
+      const { error } = await supabase
+        .from("negocios")
+        .update(updateObj)
+        .eq("user_id", user.id);
+      if (error) {
+        console.error("Error al actualizar negocio:", error.message);
+        alert("Error al actualizar negocio.");
+        return;
+      }
+      const { data: updatedBusiness, error: fetchError } = await supabase
+        .from("negocios")
+        .select("*")
+        .eq("user_id", user.id)
+        .single();
+      if (fetchError) {
+        alert("Negocio actualizado pero no se pudo refrescar el formulario.");
+        return;
+      }
+      if (updatedBusiness) {
+        setBusiness({
+          ...updatedBusiness,
+          portada_url: updatedBusiness.portada_url || "",
+          logo_url: updatedBusiness.logo_url || "",
+        });
+      }
+      alert("Negocio actualizado correctamente");
+    } catch (err) {
+      console.error("Error inesperado:", err);
+      alert("Ocurrió un error inesperado.");
+    }
+  };
+
+  // =========================
+  // Menú (Premium + Alimentos/Bebidas)
+  // =========================
+  const FOOD_KEYWORDS = [
+    "alimentos y bebidas",
+    "alimentos",
+    "bebidas",
+    "comida",
+    "comidas",
+    "restaurante",
+    "restaurant",
+    "taquería",
+    "taqueria",
+    "cafetería",
+    "cafe",
+    "bar",
+    "jugos",
+    "pastelería",
+    "pizzeria",
+    "pizzería",
+  ];
+  const isFoodCategory =
+    FOOD_KEYWORDS.some((k) =>
+      normalizeCategory(business?.categoria).includes(normalizeCategory(k))
+    ) || (business?.slug_categoria || "").includes("alimentos-y-bebidas");
+
+  const [isSavingMenu, setIsSavingMenu] = useState(false);
+  const isLikelyUrl = (txt) => {
+    if (!txt) return false;
+    try {
+      const u = new URL(txt.trim());
+      return !!u.protocol && !!u.host;
+    } catch {
+      return false;
+    }
+  };
+  const handleSaveMenu = async () => {
+    if (!business?.id) {
+      toast({
+        title: "Sin negocio",
+        description: "No se encontró el ID del negocio.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setIsSavingMenu(true);
+    try {
+      const { error } = await supabase
+        .from("negocios")
+        .update({ menu: business.menu || "" })
+        .eq("id", business.id);
+      if (error) throw error;
+      toast({ title: "Menú guardado correctamente." });
+    } catch (e) {
+      toast({
+        title: "Error al guardar el menú",
+        description: e.message,
+        variant: "destructive",
+      });
+    } finally {
+      setIsSavingMenu(false);
+    }
+  };
+
+  // Video YouTube
+  const [isSavingVideo, setIsSavingVideo] = useState(false);
+  const handleSaveVideo = async () => {
+    if (!business.id || !business.video_url) return;
+    setIsSavingVideo(true);
+    try {
+      const embedUrl = convertYouTubeUrlToEmbed(business.video_url.trim());
+      const { error } = await supabase
+        .from("negocios")
+        .update({ video_embed_url: embedUrl })
+        .eq("id", business.id);
+      if (error) throw error;
+      setBusiness((prev) => ({
+        ...prev,
+        video_url: business.video_url,
+        video_embed_url: embedUrl,
+      }));
+      toast({ title: "Video guardado correctamente." });
+    } catch (error) {
+      console.error("Error al guardar el video:", error.message);
+      toast({ title: "Error al guardar el video.", variant: "destructive" });
+    } finally {
+      setIsSavingVideo(false);
+    }
+  };
+  const extractYouTubeId = (url) => {
+    const regex = /(?:youtube\.com.*(?:\?|&)v=|youtu\.be\/)([^&#\s]+)/;
+    const match = url.match(regex);
+    return match ? match[1] : "";
+  };
+  const getYouTubeEmbedSrc = (url) => {
+    if (!url) return "";
+    if (url.includes("/embed/")) return url;
+    const id = extractYouTubeId(url);
+    return id ? `https://www.youtube.com/embed/${id}` : "";
+  };
+
+  useEffect(() => {
+    return () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+    };
+  }, [previewUrl]);
+
+  // ------- Promoción activa (última)
+  const [promocion, setPromocion] = useState(null);
+  useEffect(() => {
+    const fetchPromocion = async () => {
+      if (!business?.id) return;
+      const { data, error } = await supabase
+        .from("promociones")
+        .select("*")
+        .eq("negocio_id", business.id)
+        .order("fecha_inicio", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (!error && data) setPromocion(data);
+      else setPromocion(null);
+    };
+    if (business?.id) fetchPromocion();
+  }, [business?.id]);
+
+  // ------- Listas promociones
+  const fetchPromociones = async () => {
+    if (!negocio?.id) return;
     const { data, error } = await supabase
       .from("promociones")
       .select("*")
-      .eq("negocio_id", negocioId)
-      .order("created_at", { ascending: false });
-    if (!error) setPromociones(data);
-  };
-
-  useEffect(() => {
-    if (negocioId) {
-      fetchPromos();
+      .eq("negocio_id", negocio.id)
+      .order("fecha_inicio", { ascending: false });
+    if (error) {
+      console.error("Error al cargar promociones:", error.message);
+      return;
     }
-  }, [negocioId]);
-
+    setPromociones((data || []).map(mapPromo));
+    if (data && data.length > 0) setPromoActiva(data[0]);
+    else setPromoActiva(null);
+  };
   useEffect(() => {
-    if (!user?.id) return;
+    if (negocio?.id) fetchPromociones();
+  }, [negocio]);
 
-    const fetchBusiness = async () => {
-      try {
-        const { data: relData, error: relError } = await supabase
-          .from("negocio_propietarios")
-          .select("negocio_id")
-          .eq("user_id", user.id)
-          .maybeSingle();
+  const [promocionesActivas, setPromocionesActivas] = useState([]);
+  const fetchPromocionesActivas = async () => {
+    if (!business?.id) return;
+    const { data, error } = await supabase
+      .from("promociones")
+      .select("*")
+      .eq("negocio_id", business.id);
+    if (!error) setPromocionesActivas((data || []).map(mapPromo));
+  };
+  useEffect(() => {
+    if (business?.id) fetchPromocionesActivas();
+  }, [business?.id]);
 
-        if (relError || !relData?.negocio_id) {
-          console.warn("No se encontró relación con negocio", relError);
-          toast({
-            title: "Negocio no encontrado",
-            description:
-              "Tu usuario aún no está vinculado a ningún negocio. Contacta a soporte.",
-          });
-          return;
-        }
+  // Guardar promoción (tabla promociones) — con bloqueo y upsert por id
+  const subirImagenPromocion = async (file) => {
+    const fileExt = file.name.split(".").pop();
+    const fileName = `${Date.now()}.${fileExt}`;
+    const filePath = `promociones/${fileName}`;
 
-        setNegocioId(relData.negocio_id);
+    const { error: uploadError } = await supabase.storage
+      .from("promociones")
+      .upload(filePath, file);
+    if (uploadError) throw uploadError;
 
-        const { data: negocio, error: errorNegocio } = await supabase
-          .from("negocios")
-          .select("*")
-          .eq("id", relData.negocio_id)
-          .single();
-
-        if (errorNegocio || !negocio) {
-          toast({
-            title: "Error",
-            description: "No se pudo cargar la información del negocio.",
-          });
-          return;
-        }
-
-        setForm({
-          nombre: negocio.nombre || "",
-          descripcion: negocio.descripcion || "",
-          telefono: negocio.telefono || "",
-          whatsapp: negocio.whatsapp || "",
-          direccion: negocio.direccion || "",
-          instagram: negocio.instagram || "",
-          facebook: negocio.facebook || "",
-          web: negocio.web || "",
-          latitud: negocio.latitud || "",
-          longitud: negocio.longitud || "",
-          plan_type: negocio.plan_type || "Free",
-          promocionTitulo: "",
-          promocionDescripcion: "",
-          promocionImagenUrl: "",
-          promocionFechaInicio: "",
-          promocionFechaFin: "",
-        });
-      } catch (err) {
-        console.error("❌ Error general al cargar negocio:", err);
-        toast({
-          title: "Error inesperado",
-          description: "Ocurrió un problema al cargar los datos del negocio.",
-        });
-      }
-    };
-
-    fetchBusiness();
-  }, [user]);
-
-  if (user === undefined) {
-    return (
-      <div className="text-center mt-10 text-blue-500">Cargando sesión...</div>
-    );
-  }
-
-  if (!user) {
-    return (
-      <div className="text-center mt-10 text-red-500">
-        No has iniciado sesión. Por favor, vuelve al login.
-      </div>
-    );
-  }
-
-  if (!negocioId) {
-    return (
-      <div className="text-center mt-10 text-orange-500">
-        Aún no se ha asociado tu negocio. Si acabas de registrarte, espera unos
-        segundos o contacta a soporte.
-      </div>
-    );
-  }
-
-  const handleChange = (e) => {
-    const { name, value } = e.target;
-    setForm((prev) => ({ ...prev, [name]: value }));
+    const { data: publicURL } = supabase.storage
+      .from("promociones")
+      .getPublicUrl(filePath);
+    return publicURL.publicUrl;
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-
-    if (!user || !negocioId) {
+  const handleSavePromocion = async () => {
+    if (isSavingPromotion) return; // evita doble click
+    if (!business?.id) {
       toast({
-        title: "Error",
-        description: "No estás logueado o no tienes negocio asignado",
+        title: "Sin negocio",
+        description: "No se encontró el ID del negocio.",
+        variant: "destructive",
       });
       return;
     }
 
-    setIsSaving(true);
-    setWasSaved(false);
-
-    const formStringified = {
-      nombre: String(form.nombre),
-      descripcion: String(form.descripcion),
-      telefono: String(form.telefono),
-      whatsapp: String(form.whatsapp),
-      direccion: String(form.direccion),
-      instagram: String(form.instagram),
-      facebook: String(form.facebook),
-      web: String(form.web),
-      latitud: String(form.latitud),
-      longitud: String(form.longitud),
-    };
-
-    const { error } = await supabase
-      .from("negocios")
-      .update({
-        ...formStringified,
-      })
-      .eq("id", negocioId);
-
-    if (error) {
-      toast({ title: "Error", description: "No se pudo guardar" });
-    } else {
-      toast({
-        title: "✅ Cambios guardados",
-        description:
-          "La información de tu negocio ha sido actualizada correctamente.",
-      });
-      setWasSaved(true);
-      setTimeout(() => setWasSaved(false), 4000);
-    }
-
-    setIsSaving(false);
-  };
-
-  const generarDescripcionIA = () => {
-    const nuevaDescripcion = `Con más de 15 años de tradición en ${
-      form.direccion || "Iztapalapa"
-    }, ${
-      form.nombre
-    } ofrece tacos auténticos con atención cálida y sabor casero.`;
-    setForm((prev) => ({ ...prev, descripcion: nuevaDescripcion }));
-    toast({
-      title: "🎉 Descripción generada",
-      description: "Puedes ajustarla si deseas antes de guardar.",
-    });
-  };
-
-  const obtenerCoordenadasDesdeDireccion = async () => {
     try {
-      const response = await fetch(
-        `https://api.opencagedata.com/geocode/v1/json?q=${encodeURIComponent(
-          form.direccion
-        )}&key=${import.meta.env.VITE_OPENCAGE_API_KEY}`
-      );
-      const data = await response.json();
-
-      if (data.results.length > 0) {
-        const { lat, lng } = data.results[0].geometry;
-        setForm((prev) => ({
-          ...prev,
-          latitud: lat.toString(),
-          longitud: lng.toString(),
-        }));
+      if (!promo?.titulo || !promo?.fecha_inicio || !promo?.fecha_fin) {
         toast({
-          title: "✅ Coordenadas obtenidas",
-          description: `Lat: ${lat}, Lng: ${lng}`,
+          title: "Campos incompletos",
+          description: "Faltan título o fechas",
+          variant: "destructive",
         });
-      } else {
-        toast({
-          title: "No se encontraron coordenadas",
-          description: "Revisa que la dirección sea válida.",
-        });
+        return;
       }
+
+      setIsSavingPromotion(true);
+      setPromoSaveStep(promo.imagen_file ? "Subiendo imagen…" : "Guardando…");
+
+      // Siempre usamos el mismo id mientras dura el guardado ⇒ idempotente
+      const promoId = pendingPromoId || uuidv4();
+      if (!pendingPromoId) setPendingPromoId(promoId);
+
+      let imageUrl = promo.imagen_url || null;
+      if (promo.imagen_file) {
+        imageUrl = await subirImagenPromocion(promo.imagen_file);
+      }
+
+      setPromoSaveStep("Guardando…");
+      // upsert por id: segundo clic no duplica
+      const { error } = await supabase.from("promociones").upsert(
+        [
+          {
+            id: promoId,
+            negocio_id: business.id,
+            titulo: promo.titulo,
+            descripcion: promo.descripcion,
+            fecha_inicio: promo.fecha_inicio,
+            fecha_fin: promo.fecha_fin,
+            imagen_url: imageUrl,
+          },
+        ],
+        { onConflict: "id" }
+      );
+
+      if (error) throw error;
+
+      toast({ title: "✅ Promoción guardada correctamente" });
+      setPromo({
+        titulo: "",
+        descripcion: "",
+        fecha_inicio: "",
+        fecha_fin: "",
+        imagen_file: null,
+        imagen_url: null,
+      });
+      setPreviewImage(null);
+      setPendingPromoId(null);
+      setPromoSaveStep("");
+
+      fetchPromocionesActivas();
+      fetchPromociones();
     } catch (error) {
-      console.error(error);
+      console.error("❌ Error:", error.message);
       toast({
-        title: "Error al obtener coordenadas",
-        description: "Verifica tu conexión o clave de API.",
+        title: "Error al guardar promoción",
+        description: error.message,
+        variant: "destructive",
       });
+    } finally {
+      setIsSavingPromotion(false);
+      setPromoSaveStep("");
     }
   };
 
-  // --- Estadísticas: hooks deben ir aquí arriba (antes de cualquier return o condicional) ---
-  // Si quieres agregar lógica de estadísticas, declara aquí los hooks:
-  // const [stats, setStats] = useState([]);
-  // useEffect(() => { ... }, []);
+  // Editar y eliminar promos
+  const handleEditPromo = (p) => {
+    setModoEdicion(true);
+    setEditingPromotion(p.id);
+    setPromo({
+      titulo: p.titulo || p.promocion_titulo || "",
+      descripcion: p.descripcion || p.promocion_descripcion || "",
+      fecha_inicio: p.fecha_inicio || p.promocion_inicio || "",
+      fecha_fin: p.fecha_fin || p.promocion_vigencia || "",
+      imagen_file: null,
+      imagen_url: p.imagen_url || p.promocion_imagen || null,
+    });
+    setPreviewImage(p.imagen_url || p.promocion_imagen || null);
+  };
 
-  const handleSubmitPromo = async (e) => {
-    e.preventDefault();
-    if (!form.promocionTitulo || !form.promocionDescripcion || !negocioId) {
-      console.error("❌ Datos faltantes al enviar promo:", {
-        titulo: form.promocionTitulo,
-        descripcion: form.promocionDescripcion,
-        negocioId,
-      });
-      toast({
-        title: "Error",
-        description: "Faltan datos necesarios o el negocio no está vinculado.",
-      });
-      return;
-    }
-
-    const payload = {
-      negocio_id: negocioId,
-      titulo: form.promocionTitulo,
-      descripcion: form.promocionDescripcion,
-      imagen_url: form.promocionImagenUrl,
-      fecha_inicio: form.promocionFechaInicio,
-      fecha_fin: form.promocionFechaFin,
-    };
-
-    console.log("📤 Enviando promoción a Supabase:", payload);
-
-    let error;
-
-    if (promoEditandoId) {
-      ({ error } = await supabase
+  const handleDeletePromocion = async (promocionId) => {
+    try {
+      const { error } = await supabase
         .from("promociones")
-        .update(payload)
-        .eq("id", promoEditandoId));
-    } else {
-      ({ error } = await supabase.from("promociones").insert([payload]));
-    }
-
-    if (error) {
-      toast({ title: "Error", description: "No se pudo guardar la promoción" });
-    } else {
+        .delete()
+        .eq("id", promocionId);
+      if (error) throw error;
+      fetchPromocionesActivas();
+      fetchPromociones();
+      toast({ title: "Promoción eliminada correctamente." });
+    } catch (error) {
+      console.error("Error al eliminar promoción:", error.message);
       toast({
-        title: promoEditandoId ? "✅ Promoción actualizada" : "🎉 Publicado",
-        description: promoEditandoId
-          ? "La promoción fue actualizada correctamente."
-          : "Promoción agregada",
+        title: "Error al eliminar la promoción.",
+        description: error.message,
+        variant: "destructive",
       });
-      setWasSaved(true);
-      setTimeout(() => setWasSaved(false), 4000);
-      setForm((prev) => ({
-        ...prev,
-        promocionTitulo: "",
-        promocionDescripcion: "",
-        promocionImagenUrl: "",
-        promocionFechaInicio: "",
-        promocionFechaFin: "",
-      }));
-      setPromoEditandoId(null);
-      fetchPromos();
     }
   };
+
+  // Eliminar promoción del negocio (campo plano en negocios)
+  const handleDeletePromotion = async () => {
+    try {
+      const { error } = await supabase
+        .from("negocios")
+        .update({
+          promocion_titulo: "",
+          promocion_imagen: "",
+          promocion_vigencia: "",
+          promocion_descripcion: "",
+        })
+        .eq("id", business.id);
+      if (error) throw error;
+
+      setBusiness((prev) => ({
+        ...prev,
+        promocion_titulo: "",
+        promocion_imagen: "",
+        promocion_vigencia: "",
+        promocion_descripcion: "",
+      }));
+      toast({
+        title: "Promoción eliminada",
+        description: "La promoción activa fue borrada correctamente.",
+      });
+    } catch (error) {
+      console.error("Error al eliminar promoción:", error);
+      toast({
+        title: "Error al eliminar promoción",
+        description: error.message,
+        variant: "destructive",
+      });
+    }
+  };
+
+  if (!business) return null;
+  const plan = (business?.plan_type || "").toLowerCase();
 
   return (
-    <div className="max-w-3xl mx-auto p-6">
-      <h1 className="text-2xl font-bold mb-4">Editar Negocio</h1>
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <Label>Nombre</Label>
-          <Input name="nombre" value={form.nombre} onChange={handleChange} />
+    <div className="p-6 max-w-3xl mx-auto bg-white shadow-lg rounded-lg border border-gray-200">
+      <h1 className="text-2xl font-bold mb-4 text-gray-800">
+        Mi negocio: {business.nombre}
+      </h1>
+
+      {/* Mensajes por plan */}
+      {plan === "free" && (
+        <div className="bg-yellow-100 border border-yellow-300 text-yellow-800 px-4 py-2 rounded mb-4">
+          Estás en el <strong>Plan Gratuito</strong>. Solo puedes registrar
+          nombre, dirección y teléfono.
         </div>
-        <div>
-          <Label>Descripción</Label>
+      )}
+      {plan === "pro" && (
+        <div className="bg-blue-100 border border-blue-300 text-blue-800 px-4 py-2 rounded mb-4">
+          Estás en el <strong>Plan Pro</strong>. Tienes acceso a redes sociales,
+          galería de imágenes y descripción de tu negocio (sin IA).
+        </div>
+      )}
+      {plan === "premium" && (
+        <div className="bg-green-100 border border-green-300 text-green-800 px-4 py-2 rounded mb-4">
+          Estás en el <strong>Plan Premium</strong>. Tienes acceso completo:
+          redes sociales, galería, video, promociones y generación con IA
+          (descripción, portada y logo).
+        </div>
+      )}
+
+      {/* Información general */}
+      {(plan === "free" || plan === "pro" || plan === "premium") && (
+        <>
+          <h2 className="text-xl font-semibold text-gray-900 mt-4">
+            Información general
+          </h2>
+          <div className="h-px bg-gray-200 my-3" />
+
+          <label>Nombre</label>
           <Input
-            name="descripcion"
-            value={form.descripcion}
-            onChange={handleChange}
+            type="text"
+            name="nombre"
+            value={business.nombre || ""}
+            onChange={(e) =>
+              setBusiness({ ...business, nombre: e.target.value })
+            }
+          />
+
+          <label>Dirección</label>
+          <Input
+            type="text"
+            name="direccion"
+            value={business.direccion || ""}
+            onChange={(e) =>
+              setBusiness({ ...business, direccion: e.target.value })
+            }
+          />
+
+          <label>Teléfono</label>
+          <Input
+            type="text"
+            name="telefono"
+            value={business.telefono || ""}
+            onChange={(e) =>
+              setBusiness({ ...business, telefono: e.target.value })
+            }
+          />
+        </>
+      )}
+
+      {/* Descripción */}
+      {(plan === "pro" || plan === "premium") && (
+        <>
+          <h2 className="text-xl font-semibold text-gray-900 mt-6">
+            Descripción del negocio
+          </h2>
+          <div className="h-px bg-gray-200 my-3" />
+          <Textarea
+            placeholder="Describe tu negocio, productos o servicios..."
+            value={business.descripcion || ""}
+            onChange={(e) =>
+              setBusiness((prev) => ({ ...prev, descripcion: e.target.value }))
+            }
+          />
+          {plan === "premium" && (
+            <Button className="mt-2" onClick={handleGenerateAI}>
+              Generar descripción con IA
+            </Button>
+          )}
+        </>
+      )}
+
+      {/* Redes + Galería */}
+      {(plan === "pro" || plan === "premium") && (
+        <>
+          <h2 className="text-xl font-semibold text-gray-900 mt-8">
+            Redes sociales
+          </h2>
+          <div className="h-px bg-gray-200 my-3" />
+          <label>Instagram</label>
+          <Input
+            type="text"
+            name="instagram"
+            value={business.instagram || ""}
+            onChange={(e) =>
+              setBusiness({ ...business, instagram: e.target.value })
+            }
+          />
+          <label>Facebook</label>
+          <Input
+            type="text"
+            name="facebook"
+            value={business.facebook || ""}
+            onChange={(e) =>
+              setBusiness({ ...business, facebook: e.target.value })
+            }
+          />
+          <label>TikTok</label>
+          <Input
+            type="text"
+            name="tiktok"
+            value={business.tiktok || ""}
+            onChange={(e) =>
+              setBusiness({ ...business, tiktok: e.target.value })
+            }
+          />
+          <label>Web</label>
+          <Input
+            type="text"
+            name="web"
+            value={business.web || ""}
+            onChange={(e) => setBusiness({ ...business, web: e.target.value })}
+          />
+
+          {/* Galería (única) */}
+          <h2 className="text-xl font-semibold text-gray-900 mt-8">Galería</h2>
+          <div className="h-px bg-gray-200 my-3" />
+          <div className="mb-4">
+            <Label className="font-semibold mb-2 block">
+              Galería de imágenes
+            </Label>
+            <input
+              id="gallery-files"
+              type="file"
+              accept="image/*"
+              multiple
+              onChange={handleGallerySelection}
+              className="hidden"
+            />
+            <label
+              htmlFor="gallery-files"
+              aria-describedby="gallery-status"
+              className="inline-flex items-center gap-2 bg-orange-500 text-white px-4 py-2 rounded-md cursor-pointer hover:bg-orange-600"
+            >
+              <Upload className="w-4 h-4" />
+              Elegir archivos
+            </label>
+            <p id="gallery-status" className="mt-2 text-xs text-gray-500">
+              {selectedImages.length > 0
+                ? `${selectedImages.length} seleccionada(s)`
+                : "Sin archivos seleccionados"}
+            </p>
+            {selectedImages.length > 0 && (
+              <div className="flex flex-wrap gap-4 mt-4">
+                {selectedImages.map((img, index) => (
+                  <div key={index} className="relative">
+                    <img
+                      src={img.preview}
+                      alt={`preview-${index}`}
+                      className="w-32 h-32 object-cover rounded border"
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+            <Button
+              type="button"
+              onClick={handleUploadGallery}
+              className="mt-2"
+            >
+              Guardar imágenes seleccionadas
+            </Button>
+            <div className="flex flex-wrap mt-2">
+              {(business.gallery_images || []).map((url, index) => (
+                <div
+                  key={index}
+                  className="relative inline-block m-2 border rounded overflow-hidden"
+                >
+                  <button
+                    type="button"
+                    onClick={() => handleEliminarImagenGaleria(url)}
+                    className="absolute top-1 right-1 bg-red-500 text-white rounded-full px-2 z-10"
+                  >
+                    ❌
+                  </button>
+                  <img
+                    src={url}
+                    alt={`Galería ${index}`}
+                    className="w-32 h-32 object-cover rounded"
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ========================= */}
+      {/* Menú (solo Premium + food/drink) */}
+      {/* ========================= */}
+      {plan === "premium" && isFoodCategory && (
+        <>
+          <h2 className="text-xl font-semibold text-gray-900 mt-8">Menú</h2>
+          <div className="h-px bg-gray-200 my-3" />
+          <p className="text-xs text-gray-600 mb-2">
+            Pega tu menú como texto (un platillo por línea) o coloca un enlace a
+            tu menú (PDF, Google Drive, web).
+          </p>
+          <Textarea
+            placeholder={
+              "Ej.:\\nTacos al pastor — $30\\nAgua de horchata — $25\\nhttps://tu-sitio.com/menu.pdf"
+            }
+            value={business.menu || ""}
+            onChange={(e) => setBusiness({ ...business, menu: e.target.value })}
+          />
+          <div className="mt-2 flex gap-2 items-center">
+            <Button onClick={handleSaveMenu} disabled={isSavingMenu}>
+              {isSavingMenu ? "Guardando..." : "Guardar menú"}
+            </Button>
+            {isLikelyUrl(business.menu) && (
+              <a
+                href={business.menu}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-600 underline text-sm"
+              >
+                Abrir menú en nueva pestaña
+              </a>
+            )}
+          </div>
+          {/* Preview básico */}
+          <div className="mt-3">
+            {!isLikelyUrl(business.menu) ? (
+              <ul className="list-disc list-inside text-sm text-gray-700 bg-gray-50 p-3 rounded">
+                {(business.menu || "")
+                  .split("\\n")
+                  .map((line, idx) => line.trim())
+                  .filter(Boolean)
+                  .map((line, idx) => (
+                    <li key={idx}>{line}</li>
+                  ))}
+              </ul>
+            ) : (
+              <div className="text-xs text-gray-500">
+                Detecté un enlace. El visor embebido puede no funcionar para
+                enlaces privados; de ser así, usa el botón “Abrir menú”.
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* Video (único, solo Premium) */}
+      {plan === "premium" && (
+        <>
+          <h2 className="text-xl font-semibold text-gray-900 mt-8">Video</h2>
+          <div className="h-px bg-gray-200 my-3" />
+          <div className="mt-4">
+            <div className="space-y-2">
+              <Label
+                htmlFor="youtube_video_url"
+                className="text-base font-semibold text-gray-700"
+              >
+                Enlace de video de YouTube (embed)
+              </Label>
+              <Input
+                id="youtube_video_url"
+                type="text"
+                placeholder="https://www.youtube.com/embed/tu-video"
+                value={business.video_url || ""}
+                onChange={(e) =>
+                  setBusiness({ ...business, video_url: e.target.value })
+                }
+              />
+              {/* Preview del video usando video_embed_url */}
+              {business.video_embed_url && (
+                <div className="aspect-video mt-4 rounded-md overflow-hidden border shadow-sm">
+                  <iframe
+                    src={business.video_embed_url}
+                    title={`Video de ${business.nombre}`}
+                    className="w-full h-full"
+                    loading="lazy"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    allowFullScreen
+                  />
+                </div>
+              )}
+              <Button
+                className="mt-2"
+                onClick={handleSaveVideo}
+                disabled={isSavingVideo}
+              >
+                {isSavingVideo ? "Guardando..." : "Guardar video"}
+              </Button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Imágenes (portada/logo + IA) */}
+      <h2 className="text-xl font-semibold text-gray-900 mt-8">Imágenes</h2>
+      <div className="h-px bg-gray-200 my-3" />
+      <div className="flex gap-8 mb-4 items-end">
+        {/* Portada */}
+        <div>
+          <label>Portada</label>
+          {business.portada_url ? (
+            <img
+              src={`${business.portada_url}?t=${Date.now()}`}
+              alt="portada"
+              className="w-full max-w-xs border rounded"
+            />
+          ) : (
+            <p className="text-sm text-orange-500 italic">No hay imagen</p>
+          )}
+          <input
+            type="file"
+            accept="image/*"
+            id="portadaInput"
+            style={{ display: "none" }}
+            onChange={(e) => handleUpload(e, "portada_url", "portadas")}
           />
           <Button
-            type="button"
-            className="mt-2 text-sm bg-orange-500 text-white hover:bg-orange-600"
-            onClick={generarDescripcionIA}
+            className="mt-2 bg-orange-500 text-white hover:bg-orange-600"
+            onClick={() => document.getElementById("portadaInput").click()}
           >
-            Generar con IA
+            Cambiar portada
           </Button>
-          <p className="text-xs text-gray-500 mt-1">
-            La IA genera una propuesta, pero puedes modificarla antes de
-            guardar.
-          </p>
-        </div>
-        <div>
-          <Label>Teléfono</Label>
-          <Input
-            name="telefono"
-            value={form.telefono}
-            onChange={handleChange}
-          />
-        </div>
-        <div>
-          <Label>WhatsApp</Label>
-          <Input
-            name="whatsapp"
-            value={form.whatsapp}
-            onChange={handleChange}
-          />
-        </div>
-        <div>
-          <Label>Dirección</Label>
-          <Input
-            name="direccion"
-            value={form.direccion}
-            onChange={handleChange}
-          />
-          <div className="flex flex-col sm:flex-row sm:space-x-3 mt-2">
-            <Button
-              disabled
-              className="mb-2 sm:mb-0 sm:mt-0 mt-0 text-sm bg-gray-400 text-white"
-              type="button"
-            >
-              Usar mi ubicación actual (próximamente)
-            </Button>
-            <Button
-              type="button"
-              className="sm:mt-0 mt-2 text-sm bg-orange-500 text-white hover:bg-orange-600"
-              onClick={obtenerCoordenadasDesdeDireccion}
-            >
-              Buscar ubicación en el mapa
-            </Button>
-          </div>
-          <p className="text-xs text-gray-500 mt-1">
-            Puedes buscar la ubicación en el mapa usando la dirección, o
-            próximamente usar tu ubicación actual.
-          </p>
-          {form.latitud && form.longitud && (
-            <div className="mt-2 text-green-600 text-sm">
-              ✅ Coordenadas detectadas automáticamente.
-            </div>
+
+          {plan === "premium" && (
+            <details className="mt-2 border border-gray-200 rounded-lg">
+              <summary className="px-4 py-2 bg-orange-500 text-white font-medium rounded-md cursor-pointer hover:bg-orange-600 select-none">
+                Opciones de portada (IA)
+              </summary>
+              <div className="px-3 pb-3 pt-2">
+                <Label className="mt-3 block text-sm">
+                  Personaliza tu imagen (opcional)
+                </Label>
+                <div className="flex items-center gap-2 text-xs text-gray-600 mt-1">
+                  <input
+                    id="cover-advanced"
+                    type="checkbox"
+                    checked={!useSimpleCover}
+                    onChange={(e) => setUseSimpleCover(!e.target.checked)}
+                  />
+                  <label
+                    htmlFor="cover-advanced"
+                    style={{ display: "flex", alignItems: "center" }}
+                  >
+                    Modo avanzado (texto libre){" "}
+                    <span
+                      style={{ marginLeft: 5, cursor: "help", fontSize: 13 }}
+                    >
+                      ❓
+                    </span>
+                  </label>
+                </div>
+                <p className="text-[11px] text-gray-500 mt-1">
+                  Modo simple: llena los campos y yo armo el prompt. Modo
+                  avanzado: escribe tu idea libremente.
+                </p>
+
+                {useSimpleCover ? (
+                  <div className="mt-2 space-y-2">
+                    <div className="flex gap-2">
+                      <div className="flex-1">
+                        <Label className="text-xs">Estilo</Label>
+                        <select
+                          className="w-full border rounded p-1 text-sm"
+                          value={coverStyle}
+                          onChange={(e) => setCoverStyle(e.target.value)}
+                        >
+                          <option>Moderno</option>
+                          <option>Cálido</option>
+                          <option>Rústico</option>
+                          <option>Minimalista</option>
+                        </select>
+                      </div>
+                      <div className="flex-1">
+                        <Label className="text-xs">Iluminación</Label>
+                        <select
+                          className="W-full border rounded p-1 text-sm"
+                          value={coverLight}
+                          onChange={(e) => setCoverLight(e.target.value)}
+                        >
+                          <option>Natural</option>
+                          <option>Estudio</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <div className="flex-1">
+                        <Label className="text-xs">
+                          Colores (coma separados)
+                        </Label>
+                        <Input
+                          className="text-sm"
+                          placeholder="naranja, verde"
+                          value={coverColors}
+                          onChange={(e) => setCoverColors(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <Label className="text-xs">Elementos a mostrar</Label>
+                      <Input
+                        className="text-sm"
+                        placeholder="tacos, jugos, mostrador"
+                        value={coverElements}
+                        onChange={(e) => setCoverElements(e.target.value)}
+                      />
+                    </div>
+                    <p className="text-[11px] text-gray-500">
+                      Sugerencias para:{" "}
+                      <strong>{business?.categoria || "general"}</strong>
+                    </p>
+                    <div className="flex flex-wrap gap-2 mt-1">
+                      {coverChips.map((ex, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          className="text-xs px-2 py-1 rounded border hover:bg-orange-50"
+                          onClick={() => setCoverElements(ex)}
+                          title={`Sugerencia de portada para ${
+                            business?.categoria || "tu negocio"
+                          }`}
+                        >
+                          {ex}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="mt-2">
+                      <Label className="text-xs">
+                        Elegir sugerencia rápida
+                      </Label>
+                      <select
+                        className="w-full border rounded p-1 text-sm"
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          if (v) setCoverElements(v);
+                        }}
+                        defaultValue=""
+                      >
+                        <option value="" disabled>
+                          Selecciona un ejemplo
+                        </option>
+                        {coverChips.map((ex, idx) => (
+                          <option key={idx} value={ex}>
+                            {ex}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="mt-2">
+                      <Label className="text-xs">
+                        Plantilla rápida (portada)
+                      </Label>
+                      <select
+                        className="w-full border rounded p-1 text-sm"
+                        value={selectedCoverPreset}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setSelectedCoverPreset(v);
+                          if (v) {
+                            setUseSimpleCover(false);
+                            setAiCoverPrompt(v);
+                          } else {
+                            setUseSimpleCover(true);
+                            setAiCoverPrompt("");
+                          }
+                        }}
+                      >
+                        <option value="">— Sin plantilla —</option>
+                        {portadaEjemplos.map((p, i) => (
+                          <option key={i} value={p.prompt}>
+                            {p.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <Textarea
+                      rows={2}
+                      placeholder={coverPlaceholder}
+                      value={aiCoverPrompt}
+                      onChange={(e) => setAiCoverPrompt(e.target.value)}
+                    />
+                    <p className="text-[11px] text-gray-500 mt-1">
+                      Tip: escribe estilo, colores y elementos. Evita pedir
+                      texto dentro de la imagen.
+                    </p>
+                  </>
+                )}
+
+                <Button
+                  variant="outline"
+                  className="mt-2 ml-2"
+                  onClick={handleGenerateCoverAI}
+                  disabled={
+                    loadingCover ||
+                    !isPremiumPlan ||
+                    !!business?.ai_portada_used
+                  }
+                  title={
+                    !isPremiumPlan
+                      ? "Disponible solo en plan Premium"
+                      : business?.ai_portada_used
+                      ? "La generación de portada con IA ya fue utilizada para este negocio"
+                      : "Generar portada con IA"
+                  }
+                >
+                  {loadingCover ? "Generando..." : "Generar portada (IA)"}
+                </Button>
+
+                {business?.ai_portada_used ? (
+                  <div className="mt-1 text-xs text-red-600 flex items-center gap-2">
+                    <span>
+                      🚫 Ya usaste tu generación de <strong>portada</strong> con
+                      IA (Usos restantes: 0 de 1)
+                    </span>
+                    <a
+                      href={SUPPORT_URL}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-600 underline"
+                    >
+                      Contactar soporte
+                    </a>
+                  </div>
+                ) : (
+                  <div className="mt-1 text-xs text-green-600">
+                    ✅ Usos IA restantes: 1 de 1
+                  </div>
+                )}
+
+                <Button
+                  variant="destructive"
+                  className="mt-1 text-white"
+                  onClick={handleDeletePortada}
+                >
+                  Eliminar portada
+                </Button>
+              </div>
+            </details>
           )}
         </div>
-        <div>
-          <Label>Instagram</Label>
-          <Input
-            name="instagram"
-            value={form.instagram}
-            onChange={handleChange}
-          />
-        </div>
-        <div>
-          <Label>Facebook</Label>
-          <Input
-            name="facebook"
-            value={form.facebook}
-            onChange={handleChange}
-          />
-        </div>
-        <div>
-          <Label>Web</Label>
-          <Input name="web" value={form.web} onChange={handleChange} />
-        </div>
-        <div className="hidden">
-          <Input name="latitud" value={form.latitud} readOnly />
-        </div>
-        <div className="hidden">
-          <Input name="longitud" value={form.longitud} readOnly />
-        </div>
-        {form.latitud && form.longitud && (
-          <div className="mt-6">
-            <Label className="block mb-1">Ubicación en el mapa:</Label>
-            <iframe
-              width="100%"
-              height="200"
-              frameBorder="0"
-              className="rounded border"
-              src={`https://www.google.com/maps?q=${form.latitud},${form.longitud}&z=16&output=embed`}
-              allowFullScreen
-            ></iframe>
-          </div>
-        )}
-        <Button
-          type="submit"
-          className="mt-4"
-          disabled={
-            !negocioId ||
-            form.nombre.trim() === "" ||
-            form.descripcion.trim() === "" ||
-            form.telefono.trim() === "" ||
-            form.direccion.trim() === "" ||
-            isSaving
-          }
-        >
-          {isSaving
-            ? "⏳ Guardando..."
-            : wasSaved
-            ? "✅ Cambios guardados"
-            : "💾 Guardar cambios"}
-        </Button>
-        {wasSaved && (
-          <p className="text-green-600 text-sm mt-2">
-            ✅ La información fue actualizada con éxito.
-          </p>
-        )}
-      </form>
-      {form.plan_type === "pro" || form.plan_type === "premium" ? (
-        <div className="mt-10 border-t pt-6">
-          <h2 className="text-lg font-semibold mb-4 text-orange-600">
-            🛠️ Herramientas Premium
-          </h2>
-          <ul className="space-y-3 text-sm text-gray-700">
-            <li>
-              🔍 Estadísticas personalizadas (clics, visitas, interacción)
-            </li>
-            <li>🎯 Promociones visibles en ficha pública</li>
-            <li>🧠 Generación de contenido con IA</li>
-            <li>📸 Administración de galería multimedia</li>
-            <li>📍 Geolocalización automática</li>
-            <li>🔔 Alertas de vencimiento de plan</li>
-          </ul>
-          <p className="mt-4 text-xs text-gray-500">
-            Estas herramientas están disponibles para los negocios con plan Pro
-            o Premium.
-          </p>
-        </div>
-      ) : null}
 
-      {["pro", "premium"].includes(form.plan_type) && (
-        <div className="mt-10 border-t pt-6">
-          <h2 className="text-lg font-semibold mb-4 text-orange-600">
-            🎯 Promociones Activas
-          </h2>
-          <form onSubmit={handleSubmitPromo} className="space-y-2 mb-6">
-            <Input
-              placeholder="Título de la promoción"
-              value={form.promocionTitulo || ""}
-              onChange={(e) =>
-                setForm((prev) => ({
-                  ...prev,
-                  promocionTitulo: e.target.value,
-                }))
-              }
+        {/* Logo */}
+        <div>
+          <label>Logo</label>
+          {business.logo_url ? (
+            <img
+              src={`${business.logo_url}?t=${Date.now()}`}
+              alt="logo"
+              className="w-20 border rounded"
             />
-            <Input
-              placeholder="Descripción"
-              value={form.promocionDescripcion || ""}
-              onChange={(e) =>
-                setForm((prev) => ({
-                  ...prev,
-                  promocionDescripcion: e.target.value,
-                }))
-              }
-            />
-            <Input
-              placeholder="URL de imagen"
-              value={form.promocionImagenUrl || ""}
-              onChange={(e) =>
-                setForm((prev) => ({
-                  ...prev,
-                  promocionImagenUrl: e.target.value,
-                }))
-              }
-            />
-            <div className="flex space-x-2">
-              <Input
-                type="date"
-                value={form.promocionFechaInicio || ""}
-                onChange={(e) =>
-                  setForm((prev) => ({
-                    ...prev,
-                    promocionFechaInicio: e.target.value,
-                  }))
-                }
-              />
-              <Input
-                type="date"
-                value={form.promocionFechaFin || ""}
-                onChange={(e) =>
-                  setForm((prev) => ({
-                    ...prev,
-                    promocionFechaFin: e.target.value,
-                  }))
-                }
-              />
-            </div>
-            <Button
-              type="submit"
-              className="bg-orange-500 text-white hover:bg-orange-600"
-            >
-              {promoEditandoId ? "Actualizar promoción" : "Publicar Promoción"}
-            </Button>
-            {wasSaved && (
-              <p className="text-green-600 text-sm mt-2">
-                {promoEditandoId
-                  ? "✅ ¡Promoción actualizada con éxito!"
-                  : "✅ ¡Promoción publicada con éxito!"}
-              </p>
-            )}
-          </form>
+          ) : (
+            <p className="text-sm text-orange-500 italic">No hay imagen</p>
+          )}
+          <input
+            type="file"
+            accept="image/*"
+            id="logoInput"
+            style={{ display: "none" }}
+            onChange={(e) => handleUpload(e, "logo_url", "logos")}
+          />
+          <Button
+            className="mt-2 bg-orange-500 text-white hover:bg-orange-600"
+            onClick={() => document.getElementById("logoInput").click()}
+          >
+            Cambiar logo
+          </Button>
 
-          <div>
-            <h3 className="font-semibold text-sm mb-2">
-              Promociones Publicadas:
-            </h3>
-            <ul className="space-y-2 text-sm">
-              {promociones.map((promo) => (
-                <li key={promo.id} className="border p-3 rounded">
-                  <div className="font-semibold">{promo.titulo}</div>
-                  <div>{promo.descripcion}</div>
-                  {promo.imagen_url && (
-                    <img
-                      src={promo.imagen_url}
-                      alt={promo.titulo}
-                      className="mt-1 rounded max-h-32"
-                    />
-                  )}
-                  <div className="text-xs text-gray-500 mt-1">
-                    Vigencia: {promo.fecha_inicio} a {promo.fecha_fin}
+          {plan === "premium" && (
+            <details className="mt-2 border border-gray-200 rounded-lg">
+              <summary className="px-4 py-2 bg-orange-500 text-white font-medium rounded-md cursor-pointer hover:bg-orange-600 select-none">
+                Opciones de logo (IA)
+              </summary>
+              <div className="px-3 pb-3 pt-2">
+                <Label className="mt-3 block text-sm">
+                  Personaliza tu logo (opcional)
+                </Label>
+                <div className="flex items-center gap-2 text-xs text-gray-600 mt-1">
+                  <input
+                    id="logo-advanced"
+                    type="checkbox"
+                    checked={!useSimpleLogo}
+                    onChange={(e) => setUseSimpleLogo(!e.target.checked)}
+                  />
+                  <label
+                    htmlFor="logo-advanced"
+                    style={{ display: "flex", alignItems: "center" }}
+                  >
+                    Modo avanzado (texto libre){" "}
+                    <span
+                      style={{ marginLeft: 5, cursor: "help", fontSize: 13 }}
+                    >
+                      ❓
+                    </span>
+                  </label>
+                </div>
+                <p className="text-[11px] text-gray-500 mt-1">
+                  Modo simple: elige tipo, forma e ícono y yo armo el prompt.
+                  Modo avanzado: escribe tu idea.
+                </p>
+
+                {useSimpleLogo ? (
+                  <div className="mt-2 space-y-2">
+                    <div className="flex gap-2">
+                      <div className="flex-1">
+                        <Label className="text-xs">Tipo de logo</Label>
+                        <select
+                          className="w-full border rounded p-1 text-sm"
+                          value={logoType}
+                          onChange={(e) => setLogoType(e.target.value)}
+                        >
+                          <option>Isotipo</option>
+                          <option>Imagotipo</option>
+                          <option>Símbolo</option>
+                        </select>
+                      </div>
+                      <div className="flex-1">
+                        <Label className="text-xs">Forma</Label>
+                        <select
+                          className="w-full border rounded p-1 text-sm"
+                          value={logoShape}
+                          onChange={(e) => setLogoShape(e.target.value)}
+                        >
+                          <option>Circular</option>
+                          <option>Cuadrado</option>
+                          <option>Libre</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <div className="flex-1">
+                        <Label className="text-xs">Ícono principal</Label>
+                        <Input
+                          className="text-sm"
+                          placeholder="taco, nopal, jugo"
+                          value={logoIcon}
+                          onChange={(e) => setLogoIcon(e.target.value)}
+                        />
+                      </div>
+                      <div className="flex-1">
+                        <Label className="text-xs">Colores</Label>
+                        <Input
+                          className="text-sm"
+                          placeholder="negro y naranja"
+                          value={logoColors}
+                          onChange={(e) => setLogoColors(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <div className="flex-1">
+                        <Label className="text-xs">Fondo</Label>
+                        <select
+                          className="w-full border rounded p-1 text-sm"
+                          value={logoBg}
+                          onChange={(e) => setLogoBg(e.target.value)}
+                        >
+                          <option>Transparente</option>
+                          <option>Sólido</option>
+                        </select>
+                      </div>
+                      <div className="flex-1">
+                        <Label className="text-xs">Detalle</Label>
+                        <select
+                          className="w-full border rounded p-1 text-sm"
+                          value={logoDetail}
+                          onChange={(e) => setLogoDetail(e.target.value)}
+                        >
+                          <option>Minimalista</option>
+                          <option>Medio</option>
+                        </select>
+                      </div>
+                    </div>
+                    <p className="text-[11px] text-gray-500">
+                      Sugerencias para:{" "}
+                      <strong>{business?.categoria || "general"}</strong>
+                    </p>
+                    <div className="flex flex-wrap gap-2 mt-1">
+                      {logoChips.map((p, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          className="text-xs px-2 py-1 rounded border hover:bg-orange-50"
+                          onClick={() => {
+                            setLogoIcon(p.icon);
+                            setLogoColors(p.colors);
+                          }}
+                          title={`Sugerencia de logo para ${
+                            business?.categoria || "tu negocio"
+                          }`}
+                        >
+                          {p.sample}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="mt-2">
+                      <Label className="text-xs">
+                        Elegir sugerencia rápida
+                      </Label>
+                      <select
+                        className="w-full border rounded p-1 text-sm"
+                        onChange={(e) => {
+                          const idx = e.target.value;
+                          if (idx !== "") {
+                            const p = logoChips[Number(idx)];
+                            if (p) {
+                              setLogoIcon(p.icon);
+                              setLogoColors(p.colors);
+                            }
+                          }
+                        }}
+                        defaultValue=""
+                      >
+                        <option value="" disabled>
+                          Selecciona un ejemplo
+                        </option>
+                        {logoChips.map((p, idx) => (
+                          <option key={idx} value={idx}>
+                            {p.sample}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="mt-2">
+                      <Label className="text-xs">Plantilla rápida (logo)</Label>
+                      <select
+                        className="w-full border rounded p-1 text-sm"
+                        value={selectedLogoPreset}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setSelectedLogoPreset(v);
+                          if (v) {
+                            setUseSimpleLogo(false);
+                            setAiLogoPrompt(v);
+                          } else {
+                            setUseSimpleLogo(true);
+                            setAiLogoPrompt("");
+                          }
+                        }}
+                      >
+                        <option value="">— Sin plantilla —</option>
+                        {logoEjemplos.map((p, i) => (
+                          <option key={i} value={p.prompt}>
+                            {p.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
-                  <button
-                    onClick={async () => {
-                      const confirmed = window.confirm(
-                        "¿Estás seguro de eliminar esta promoción?"
-                      );
-                      if (!confirmed) return;
-                      const { error } = await supabase
-                        .from("promociones")
-                        .delete()
-                        .eq("id", promo.id);
-                      if (error) {
-                        console.error(
-                          "❌ Error al eliminar la promoción:",
-                          error.message
-                        );
-                        toast({
-                          title: "Error",
-                          description: "No se pudo eliminar la promoción.",
-                        });
-                      } else {
-                        setPromociones((prev) =>
-                          prev.filter((p) => p.id !== promo.id)
-                        );
-                        toast({
-                          title: "✅ Eliminada",
-                          description:
-                            "La promoción fue eliminada exitosamente.",
-                        });
-                      }
-                    }}
-                    className="mt-2 text-sm text-red-600 hover:underline"
-                  >
-                    Eliminar promoción
-                  </button>
-                  <button
-                    onClick={() => {
-                      setForm((prev) => ({
-                        ...prev,
-                        promocionTitulo: promo.titulo,
-                        promocionDescripcion: promo.descripcion,
-                        promocionImagenUrl: promo.imagen_url,
-                        promocionFechaInicio: promo.fecha_inicio,
-                        promocionFechaFin: promo.fecha_fin,
-                      }));
-                      setPromoEditandoId(promo.id);
-                    }}
-                    className="ml-4 text-sm text-blue-600 hover:underline"
-                  >
-                    Editar promoción
-                  </button>
-                </li>
-              ))}
-            </ul>
+                ) : (
+                  <>
+                    <Textarea
+                      rows={2}
+                      placeholder={logoPlaceholder}
+                      value={aiLogoPrompt}
+                      onChange={(e) => setAiLogoPrompt(e.target.value)}
+                    />
+                    <p className="text-[11px] text-gray-500 mt-1">
+                      Tip: describe ícono, forma, colores y fondo. Evita texto
+                      dentro del logo.
+                    </p>
+                  </>
+                )}
+
+                <Button
+                  variant="outline"
+                  className="mt-2 ml-2"
+                  onClick={handleGenerateLogoAI}
+                  disabled={
+                    loadingLogo || !isPremiumPlan || !!business?.ai_logo_used
+                  }
+                  title={
+                    !isPremiumPlan
+                      ? "Disponible solo en plan Premium"
+                      : business?.ai_logo_used
+                      ? "La generación de logo con IA ya fue utilizada para este negocio"
+                      : "Generar logo con IA"
+                  }
+                >
+                  {loadingLogo ? "Generando..." : "Generar logo (IA)"}
+                </Button>
+
+                {business?.ai_logo_used ? (
+                  <div className="mt-1 text-xs text-red-600 flex items-center gap-2">
+                    <span>
+                      🚫 Ya usaste tu generación de <strong>logo</strong> con IA
+                      (Usos restantes: 0 de 1)
+                    </span>
+                    <a
+                      href={SUPPORT_URL}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-600 underline"
+                    >
+                      Contactar soporte
+                    </a>
+                  </div>
+                ) : (
+                  <div className="mt-1 text-xs text-green-600">
+                    ✅ Usos IA restantes: 1 de 1
+                  </div>
+                )}
+
+                <Button
+                  variant="destructive"
+                  className="mt-1 text-white"
+                  onClick={handleDeleteLogo}
+                >
+                  Eliminar logo
+                </Button>
+              </div>
+            </details>
+          )}
+        </div>
+      </div>
+
+      {/* ============================== */}
+      {/* Promociones: alta/edición */}
+      {/* ============================== */}
+      <div className="h-px bg-gray-200 my-6" />
+      <h2 className="text-lg font-bold mt-8 text-orange-500">
+        🎁 Nueva Promoción
+      </h2>
+      {plan !== "premium" && (
+        <div className="my-3 p-3 rounded bg-yellow-50 border border-yellow-200 text-sm text-yellow-800">
+          Las promociones están disponibles solo en el{" "}
+          <strong>Plan Premium</strong>. Actualiza tu plan para habilitar este
+          formulario.
+          <div className="mt-2">
+            <a
+              href="/precios"
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded bg-orange-600 text-white hover:bg-orange-700"
+            >
+              Mejorar al Plan Premium
+            </a>
           </div>
         </div>
       )}
-      <div className="flex items-center space-x-3 mt-6">
-        <Mail className="h-4 w-4 text-orange-500 flex-shrink-0" />
-        <span className="text-gray-300 text-sm">contacto@iztapamarket.com</span>
+
+      <div
+        className={`mt-2 mb-6 border p-4 rounded-lg bg-orange-50 space-y-4 ${
+          isSavingPromotion || plan !== "premium"
+            ? "opacity-60 pointer-events-none"
+            : ""
+        }`}
+        aria-disabled={isSavingPromotion || plan !== "premium"}
+        title={
+          plan !== "premium" ? "Disponible solo en Plan Premium" : undefined
+        }
+      >
+        <div>
+          <Label htmlFor="promo-titulo" className="font-semibold block">
+            Título de la promoción
+          </Label>
+          <Input
+            id="promo-titulo"
+            placeholder="Título de la promoción"
+            value={promo?.titulo || ""}
+            onChange={(e) =>
+              setPromo((prev) => ({ ...prev, titulo: e.target.value }))
+            }
+            disabled={isSavingPromotion || plan !== "premium"}
+          />
+        </div>
+
+        <div>
+          <Label htmlFor="promo-desc" className="font-semibold block">
+            Descripción de la promoción
+          </Label>
+          <Textarea
+            id="promo-desc"
+            placeholder="Descripción de la promoción"
+            value={promo?.descripcion || ""}
+            onChange={(e) =>
+              setPromo((prev) => ({ ...prev, descripcion: e.target.value }))
+            }
+            disabled={isSavingPromotion || plan !== "premium"}
+          />
+        </div>
+
+        <div>
+          <Label htmlFor="promo-img" className="font-semibold block">
+            Imagen de la promoción
+          </Label>
+          <input
+            id="promo-img"
+            type="file"
+            accept="image/*"
+            onChange={(e) => {
+              const file = e.target.files[0];
+              setPromo((prev) => ({ ...prev, imagen_file: file }));
+              if (file) setPreviewImage(URL.createObjectURL(file));
+            }}
+            className="mt-1"
+            disabled={isSavingPromotion || plan !== "premium"}
+          />
+        </div>
+
+        {previewImage && (
+          <img
+            src={previewImage}
+            alt="Vista previa de la promoción"
+            className="mt-3 max-h-64 rounded-md shadow"
+          />
+        )}
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <Label htmlFor="promo-fecha-inicio" className="font-semibold block">
+              Fecha de inicio
+            </Label>
+            <Input
+              id="promo-fecha-inicio"
+              type="date"
+              value={promo?.fecha_inicio || ""}
+              onChange={(e) =>
+                setPromo((prev) => ({ ...prev, fecha_inicio: e.target.value }))
+              }
+              disabled={isSavingPromotion || plan !== "premium"}
+            />
+          </div>
+
+          <div>
+            <Label htmlFor="promo-fecha-fin" className="font-semibold block">
+              Fecha de fin
+            </Label>
+            <Input
+              id="promo-fecha-fin"
+              type="date"
+              value={promo?.fecha_fin || ""}
+              onChange={(e) =>
+                setPromo((prev) => ({ ...prev, fecha_fin: e.target.value }))
+              }
+              disabled={isSavingPromotion || plan !== "premium"}
+            />
+          </div>
+        </div>
+
+        <div className="pt-4 flex items-center gap-3">
+          {modoEdicion ? (
+            <Button
+              type="button"
+              onClick={actualizarPromocion}
+              className="bg-yellow-500 hover:bg-yellow-600 text-white disabled:opacity-60 disabled:cursor-not-allowed"
+              disabled={isUpdatingPromotion || plan !== "premium"}
+              title={
+                plan !== "premium"
+                  ? "Disponible solo en Plan Premium"
+                  : undefined
+              }
+              aria-busy={isUpdatingPromotion}
+            >
+              {isUpdatingPromotion ? (
+                <span className="inline-flex items-center gap-2">
+                  <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                    <circle
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                      opacity="0.25"
+                    />
+                    <path
+                      d="M22 12a10 10 0 0 1-10 10"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    />
+                  </svg>
+                  Guardando…
+                </span>
+              ) : (
+                "Actualizar promoción"
+              )}
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              onClick={handleSavePromocion}
+              className="bg-green-600 hover:bg-green-700 text-white disabled:opacity-60 disabled:cursor-not-allowed"
+              disabled={isSavingPromotion || plan !== "premium"}
+              title={
+                plan !== "premium"
+                  ? "Disponible solo en Plan Premium"
+                  : undefined
+              }
+              aria-busy={isSavingPromotion}
+            >
+              {isSavingPromotion ? (
+                <span className="inline-flex items-center gap-2">
+                  <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                    <circle
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                      opacity="0.25"
+                    />
+                    <path
+                      d="M22 12a10 10 0 0 1-10 10"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    />
+                  </svg>
+                  {promoSaveStep || "Guardando…"}
+                </span>
+              ) : (
+                "Guardar promoción"
+              )}
+            </Button>
+          )}
+
+          {isSavingPromotion && (
+            <span className="text-sm text-gray-600">{promoSaveStep}</span>
+          )}
+        </div>
+      </div>
+
+      {/* Lista de promociones activas */}
+      <div className="h-px bg-gray-200 my-6" />
+      <h2 className="text-xl font-bold mt-10 mb-2 text-red-600">
+        ❤️ Promociones Activas
+      </h2>
+      <div className="space-y-4">
+        {promocionesActivas.length === 0 ? (
+          <p className="text-gray-500">
+            No hay promociones activas registradas.
+          </p>
+        ) : (
+          promocionesActivas.map((p) => (
+            <PromoCard
+              key={p.id}
+              promo={p}
+              canDelete
+              onDelete={handleDeletePromocion}
+              onEdit={handleEditPromo}
+            />
+          ))
+        )}
+      </div>
+
+      {/* Extras UI */}
+      <h2 className="text-xl font-semibold text-gray-900 mt-8">
+        Herramientas Premium
+      </h2>
+      <div className="h-px bg-gray-200 my-3" />
+      <div className="mt-8 bg-orange-50 p-4 rounded shadow">
+        <h3 className="text-md font-semibold text-orange-600 mb-2">
+          Herramientas Premium
+        </h3>
+        <ul className="text-sm list-disc list-inside text-gray-800">
+          <li>✅ SEO keywords personalizadas</li>
+          <li>✅ Paquete de marketing</li>
+          <li>✅ Video promocional</li>
+        </ul>
+      </div>
+
+      <h2 className="text-xl font-semibold text-gray-900 mt-8">Estadísticas</h2>
+      <div className="h-px bg-gray-200 my-3" />
+      <div className="mt-4 text-sm text-gray-700">
+        <p>
+          📍 <strong>{business.visitas}</strong> visitas
+        </p>
+        <p>
+          🖱️ <strong>{business.clics}</strong> clics
+        </p>
+        <p className="text-gray-500 text-xs">
+          Disponibles en planes Pro y Premium
+        </p>
+      </div>
+
+      <div className="mt-6 flex flex-col sm:flex-row gap-3 items-start">
+        <Button
+          onClick={handleUpdateBusiness}
+          className="bg-blue-600 hover:bg-blue-700 text-white"
+        >
+          Guardar cambios de negocio
+        </Button>
+        <Button
+          variant="destructive"
+          className="text-white"
+          onClick={handleDeleteBusiness}
+        >
+          Eliminar negocio permanentemente
+        </Button>
       </div>
     </div>
   );
 };
 
 export default MiNegocioPage;
+
+// Consulta auxiliar (opcional)
+export const fetchPromocionByNegocioId = async (negocioId) => {
+  const { data, error } = await supabase
+    .from("promociones")
+    .select("*")
+    .eq("negocio_id", negocioId)
+    .single();
+
+  if (error) {
+    console.error("Error al obtener promoción:", error.message);
+    return null;
+  }
+  return data;
+};

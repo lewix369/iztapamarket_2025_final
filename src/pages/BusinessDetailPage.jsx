@@ -4,60 +4,101 @@ import { useParams } from "react-router-dom";
 import { supabase } from "@/lib/supabaseClient";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import PromoCard from "@/components/PromoCard";
 
 const BusinessDetailPage = () => {
   const { slug } = useParams();
   const [business, setBusiness] = useState(null);
   const [loading, setLoading] = useState(true);
   const [plan, setPlan] = useState(null);
+  if (!plan) {
+    console.warn(
+      "⚠️ Plan no definido aún. Ocultando contenido condicional temporalmente."
+    );
+  }
   const [promociones, setPromociones] = useState([]);
 
   useEffect(() => {
     const fetchBusiness = async () => {
+      // Solo mostrar negocios PUBLICOS: aprobados y no eliminados
       console.log("📥 Cargando negocio con slug:", slug);
       const { data, error } = await supabase
         .from("negocios")
         .select("*")
         .eq("slug", slug)
-        .eq("is_deleted", false)
+        .eq("is_deleted", false) // ocultar eliminados
+        .eq("is_approved", true) // mostrar solo aprobados
         .maybeSingle();
+
+      console.log("🔎 Resultado:", data);
 
       if (error) {
         console.error("❌ Error al obtener el negocio:", error.message);
+      } else if (!data) {
+        console.warn("⚠️ Negocio no encontrado para slug:", slug);
+        setBusiness(null);
       } else {
-        setBusiness(data);
-        const plan = data?.plan_type?.toLowerCase();
-        setPlan(plan);
+        // Normaliza plan a minúsculas SIN renombrar ("profesional" se queda como "profesional") y garantiza que gallery_images sea un arreglo
+        const normalizedPlan = (data?.plan_type || "").toLowerCase().trim();
+
+        const galleryField = data?.gallery_images;
+        const normalizedGallery = Array.isArray(galleryField)
+          ? galleryField
+          : typeof galleryField === "string"
+          ? galleryField
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean)
+          : [];
+
+        setBusiness({
+          ...data,
+          gallery_images: normalizedGallery,
+          plan_type: normalizedPlan,
+          video_embed_url: data.video_embed_url || data.video || "",
+        });
+        setPlan(normalizedPlan);
         console.log("📦 Datos recibidos del negocio:", data);
       }
 
       setLoading(false);
     };
-
     if (slug) fetchBusiness();
-    console.log("🔍 Slug recibido:", slug);
   }, [slug]);
 
-  // Cargar promociones activas del negocio
+  // Promociones activas (solo cuando el negocio aprobado está cargado)
   useEffect(() => {
-    const cargarPromociones = async () => {
+    const fetchPromociones = async () => {
       if (!business?.id) return;
 
-      const { data, error } = await supabase
+      const { data: promocionesData, error: promocionesError } = await supabase
         .from("promociones")
         .select("*")
-        .eq("negocio_id", business.id)
-        .gte("fecha_fin", new Date().toISOString());
+        .eq("negocio_id", business.id);
 
-      if (error) {
-        console.error("❌ Error al cargar promociones:", error);
-      } else {
-        setPromociones(data);
+      if (promocionesError) {
+        console.error("❌ Error cargando promociones:", promocionesError);
+        return;
       }
+
+      setPromociones(promocionesData || []);
     };
 
-    cargarPromociones();
+    fetchPromociones();
   }, [business?.id]);
+
+  const promocionesArray = Array.isArray(promociones)
+    ? promociones
+    : promociones
+    ? [promociones]
+    : [];
+
+  const formatDate = (date) =>
+    new Date(date).toLocaleDateString("es-MX", {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
 
   if (loading) {
     return (
@@ -75,29 +116,195 @@ const BusinessDetailPage = () => {
     );
   }
 
-  // Formatea el enlace de WhatsApp según reglas mejoradas
+  // WhatsApp
   const formatWhatsAppLink = (whatsapp) => {
     if (!whatsapp) return null;
-
     const raw = whatsapp.trim();
     const isFullURL = raw.startsWith("http");
-
     if (isFullURL) {
-      // Extrae el número del enlace completo si es necesario
       const match = raw.match(/wa\.me\/(\d+)/);
       return match ? `https://wa.me/${match[1]}` : raw;
     }
-
-    // Limpia el número de símbolos y espacios
     const cleaned = raw.replace(/[^0-9]/g, "");
     return `https://wa.me/${cleaned}`;
   };
-  // Validación visual para el número de WhatsApp
 
-  // No hay botones para obtener coordenadas en este archivo.
-  // Si quieres cambiar los textos de botones de ubicación, por favor proporciona el archivo del formulario de registro o edición del negocio.
+  // Helpers visuales
+  const prettyCategory = (cat) => {
+    if (!cat || typeof cat !== "string") return cat || "";
+    return cat
+      .split("-")
+      .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
+      .join(" ");
+  };
 
-  console.log("🧠 Renderizando vista con datos:", business);
+  // Extraer ID de YouTube para el embed del video
+  const extractYouTubeId = (url) => {
+    const match = (url || "").match(
+      /(?:youtube\.com\/(?:watch\?v=|embed\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/
+    );
+    return match ? match[1] : "";
+  };
+
+  // ---------- Lógica para mostrar Menú (ya implementada) ----------
+  const rawCat = (business?.slug_categoria || business?.categoria || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, ""); // sin acentos
+
+  const isFoodCategory =
+    rawCat.includes("alimentos") ||
+    rawCat.includes("bebidas") ||
+    rawCat.includes("restauran") ||
+    rawCat.includes("taquer") ||
+    rawCat.includes("antojito") ||
+    rawCat.includes("pizzer") ||
+    rawCat.includes("cafeter") ||
+    rawCat.includes("bar") ||
+    rawCat.includes("pasteler") ||
+    rawCat.includes("jugos");
+
+  const menuStr = (business?.menu || "").trim();
+  const hasMenu = menuStr.length > 0;
+  const looksLikeURL = /^https?:\/\//i.test(menuStr);
+
+  const renderMenuBlock = () => {
+    if (!hasMenu) return null;
+
+    // Caso PDF/Google Drive
+    if (looksLikeURL) {
+      const isPDF = /\.pdf(\?|$)/i.test(menuStr);
+      const isDrive = /drive\.google\.com/i.test(menuStr);
+      const toDrivePreview = (url) => {
+        const m1 = url.match(/drive\.google\.com\/file\/d\/([^/]+)/i);
+        if (m1) return `https://drive.google.com/file/d/${m1[1]}/preview`;
+        const m2 = url.match(/drive\.google\.com\/open\?id=([^&]+)/i);
+        if (m2) return `https://drive.google.com/file/d/${m2[1]}/preview`;
+        return url;
+      };
+      const googleViewer = (url) =>
+        `https://drive.google.com/viewerng/viewer?embedded=1&amp;url=${encodeURIComponent(
+          url
+        )}`;
+      const embedSrc = isDrive
+        ? toDrivePreview(menuStr)
+        : isPDF
+        ? googleViewer(menuStr)
+        : null;
+      return (
+        <section className="mt-10">
+          <div className="bg-orange-50 border-l-4 border-orange-500 text-orange-900 p-4 rounded">
+            <h2 className="text-2xl font-bold mb-3">Menú</h2>
+            <p className="mb-3">Consulta el menú actualizado del negocio.</p>
+            <div className="mb-4">
+              <a
+                href={menuStr}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-block bg-orange-600 text-white px-4 py-2 rounded hover:bg-orange-700"
+              >
+                Abrir menú en nueva pestaña
+              </a>
+            </div>
+            {embedSrc && (
+              <div className="rounded-lg overflow-hidden border bg-white">
+                <iframe
+                  src={embedSrc}
+                  title="Menú"
+                  className="w-full"
+                  style={{ height: 680 }}
+                  allow="autoplay"
+                />
+              </div>
+            )}
+          </div>
+        </section>
+      );
+    }
+    // Caso texto plano
+    const clean = (l = "") =>
+      l
+        .replace(/^[•\-\*\u2022]+\s*/g, "")
+        .replace(/\s{2,}/g, " ")
+        .trim();
+    const isHeader = (line) => {
+      if (!line) return false;
+      const noPrice = !/\$\s?\d/.test(line);
+      const looksHeader =
+        /[:：]$/.test(line) ||
+        (line === line.toUpperCase() &&
+          /[A-ZÁÉÍÓÚÑ]/.test(line) &&
+          line.length > 2);
+      return noPrice && looksHeader;
+    };
+    const splitNamePrice = (line) => {
+      const m = line.match(/\$\s?\d+(?:[.,]\d{2})?/g);
+      if (!m) return { name: clean(line), price: "" };
+      const last = m[m.length - 1];
+      const idx = line.lastIndexOf(last);
+      const name = clean(line.slice(0, idx).replace(/[–—-]\s*$/, ""));
+      return { name: name || clean(line), price: last.trim() };
+    };
+    const lines = menuStr
+      .split(/\r?\n/)
+      .map((l) => clean(l))
+      .filter(Boolean);
+    const sections = [];
+    let current = { title: "Menú", items: [] };
+    for (const line of lines) {
+      if (isHeader(line)) {
+        if (current.items.length || current.title !== "Menú")
+          sections.push(current);
+        current = { title: line.replace(/[:：]$/, ""), items: [] };
+        continue;
+      }
+      const { name, price } = splitNamePrice(line);
+      current.items.push({ name, price });
+    }
+    if (current.items.length || current.title !== "Menú")
+      sections.push(current);
+    return (
+      <section className="mt-10">
+        <div className="bg-orange-50 border-l-4 border-orange-500 text-orange-900 p-4 rounded">
+          <h2 className="text-2xl font-bold mb-3">Menú</h2>
+          <p className="mb-3">
+            Precios y platillos proporcionados por el negocio.
+          </p>
+          <div className="rounded-lg border bg-white">
+            <div className="p-5">
+              {sections.map((sec, idx) => (
+                <div key={idx} className="mb-6 last:mb-0">
+                  {sec.title && (
+                    <h3 className="text-lg font-semibold text-gray-800 mb-2">
+                      {sec.title}
+                    </h3>
+                  )}
+                  <ul className="divide-y">
+                    {sec.items.map((it, i) => (
+                      <li
+                        key={i}
+                        className="flex items-baseline justify-between py-2"
+                      >
+                        <span className="text-gray-800 pr-4">{it.name}</span>
+                        {it.price ? (
+                          <span className="font-semibold tabular-nums">
+                            {it.price}
+                          </span>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+    );
+  };
+  const shouldShowMenu = plan === "premium" && isFoodCategory && hasMenu;
+  // ---------------------------------------------------------------
+
   return (
     <>
       <Helmet>
@@ -157,6 +364,7 @@ const BusinessDetailPage = () => {
           })}
         </script>
       </Helmet>
+
       <div className="container mx-auto px-4 py-10">
         <div className="mb-6">
           {business.logo_url && (
@@ -167,10 +375,10 @@ const BusinessDetailPage = () => {
             />
           )}
           <h1 className="text-4xl font-bold mb-2">{business.nombre}</h1>
-          <Badge variant="outline">{business.categoria}</Badge>
-          {plan === "pro" && (
+          <Badge variant="outline">{prettyCategory(business.categoria)}</Badge>
+          {plan === "profesional" && (
             <Badge className="bg-blue-100 text-blue-800 border border-blue-300 ml-2">
-              Pro
+              Profesional
             </Badge>
           )}
           {plan === "free" && (
@@ -184,15 +392,44 @@ const BusinessDetailPage = () => {
             </Badge>
           )}
         </div>
+
+        {/* Promoción destacada */}
+        {business.promocion_imagen && (
+          <div className="w-full max-w-md mx-auto my-6">
+            <img
+              src={business.promocion_imagen}
+              alt="Promoción"
+              className="w-full h-auto rounded-xl shadow-lg"
+            />
+          </div>
+        )}
+        {business.promocion_vigencia && (
+          <p className="text-center text-muted-foreground text-sm mb-4">
+            Vigencia: {business.promocion_vigencia}
+          </p>
+        )}
+
+        {business.portada_url && (
+          <div className="mt-8 mb-6">
+            <img
+              src={business.portada_url}
+              alt="Portada del negocio"
+              className="w-full rounded-lg"
+            />
+          </div>
+        )}
+
+        {/* Estadísticas */}
+        {business?.visitas && (
+          <p className="text-sm text-gray-600">👁️ {business.visitas} visitas</p>
+        )}
+        {business?.clicks && (
+          <p className="text-sm text-gray-600">👆 {business.clicks} clics</p>
+        )}
+
+        {/* Contenido por plan */}
         {plan === "premium" && (
           <>
-            {business.imagen_url && (
-              <img
-                src={business.imagen_url}
-                alt={business.nombre}
-                className="w-full max-h-96 object-cover rounded-lg mb-6"
-              />
-            )}
             {Array.isArray(business.gallery_images) &&
               business.gallery_images.length > 0 && (
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">
@@ -207,13 +444,18 @@ const BusinessDetailPage = () => {
                 </div>
               )}
 
-            <p className="text-gray-700 mb-4">{business.descripcion}</p>
-            <p className="text-sm text-gray-500 mb-2">
-              Dirección: {business.direccion}
-            </p>
-            <p className="text-sm text-gray-500 mb-4">
-              Teléfono: {business.telefono}
-            </p>
+            <div className="bg-green-50 border-l-4 border-green-500 text-green-800 p-4 rounded mb-4">
+              <p className="text-gray-700 pl-1 mb-2">
+                {business.descripcion ||
+                  "Sin descripción disponible por el momento."}
+              </p>
+              <p className="text-sm text-gray-500 pl-1 mb-1">
+                Dirección: {business.direccion}
+              </p>
+              <p className="text-sm text-gray-500 pl-1">
+                Teléfono: {business.telefono}
+              </p>
+            </div>
 
             <div className="flex flex-col gap-3 mt-4">
               <Button asChild>
@@ -244,6 +486,24 @@ const BusinessDetailPage = () => {
                 </p>
               )}
 
+            {business?.plan_type === "premium" && business.video_embed_url && (
+              <div className="my-6">
+                <h3 className="text-xl font-semibold mb-2">Video</h3>
+                <div className="aspect-w-16 aspect-h-9">
+                  <iframe
+                    src={`https://www.youtube.com/embed/${extractYouTubeId(
+                      business.video_embed_url
+                    )}`}
+                    title="Video del negocio"
+                    frameBorder="0"
+                    allowFullScreen
+                    loading="lazy"
+                    className="w-full h-64"
+                  ></iframe>
+                </div>
+              </div>
+            )}
+
             {business.mapa_embed_url && (
               <div className="mt-6">
                 <iframe
@@ -256,22 +516,10 @@ const BusinessDetailPage = () => {
               </div>
             )}
 
-            {business.video_embed_url && (
-              <div className="my-6">
-                <h3 className="text-xl font-semibold mb-2">Video</h3>
-                <div className="aspect-w-16 aspect-h-9">
-                  <iframe
-                    src={business.video_embed_url}
-                    title="Video del negocio"
-                    frameBorder="0"
-                    allowFullScreen
-                    className="w-full h-64"
-                  ></iframe>
-                </div>
-              </div>
-            )}
-
-            {(business.instagram || business.facebook || business.web) && (
+            {(business.instagram ||
+              business.facebook ||
+              business.web ||
+              business.tiktok) && (
               <div className="my-6 space-y-2">
                 <h3 className="text-xl font-semibold mb-2">Síguenos</h3>
                 <div className="flex flex-wrap gap-2">
@@ -295,6 +543,16 @@ const BusinessDetailPage = () => {
                       Facebook
                     </a>
                   )}
+                  {business.tiktok && (
+                    <a
+                      href={business.tiktok}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-block bg-black text-white px-4 py-2 rounded hover:opacity-90"
+                    >
+                      TikTok
+                    </a>
+                  )}
                   {business.web && (
                     <a
                       href={business.web}
@@ -309,12 +567,6 @@ const BusinessDetailPage = () => {
               </div>
             )}
 
-            <div className="bg-green-50 border-l-4 border-green-500 text-green-800 p-4 rounded mt-6">
-              Este negocio cuenta con un plan <strong>Premium</strong>. Disfruta
-              de todos los beneficios: video, contacto directo, redes sociales y
-              más.
-            </div>
-
             {Array.isArray(business.services) &&
               business.services.length > 0 && (
                 <div className="bg-yellow-50 border-l-4 border-yellow-400 text-yellow-800 p-4 rounded mt-6">
@@ -328,15 +580,9 @@ const BusinessDetailPage = () => {
                   </ul>
                 </div>
               )}
-
-            {business.estadisticas && (
-              <div className="bg-gray-50 border-l-4 border-gray-400 text-gray-800 p-4 rounded mt-6">
-                <h3 className="text-lg font-semibold mb-2">Estadísticas</h3>
-                <p className="text-sm">{business.estadisticas}</p>
-              </div>
-            )}
           </>
         )}
+
         {plan === "free" && (
           <>
             {business.imagen_url && (
@@ -346,15 +592,15 @@ const BusinessDetailPage = () => {
                 className="w-full max-h-96 object-cover rounded-lg mb-6"
               />
             )}
-
-            {/* Advertencia si no hay descripción */}
             {!business.descripcion && (
               <p className="text-sm text-red-500">
                 ⚠️ Este negocio aún no tiene descripción cargada.
               </p>
             )}
-            <p className="text-gray-700 mb-4">{business.descripcion}</p>
-            {/* Mostrar horarios aunque el plan sea free */}
+            <p className="text-gray-700 mb-4">
+              {business.descripcion ||
+                "Sin descripción disponible por el momento."}
+            </p>
             {business.hours ? (
               <p className="text-sm text-gray-500 mb-2">
                 🕒 Horarios: {business.hours}
@@ -386,6 +632,23 @@ const BusinessDetailPage = () => {
                 </p>
               )}
 
+            {business?.plan_type === "premium" && business.video_embed_url && (
+              <div className="my-6">
+                <h3 className="text-xl font-semibold mb-2">Video</h3>
+                <div className="aspect-w-16 aspect-h-9">
+                  <iframe
+                    src={`https://www.youtube.com/embed/${extractYouTubeId(
+                      business.video_embed_url
+                    )}`}
+                    title="Video del negocio"
+                    frameBorder="0"
+                    allowFullScreen
+                    loading="lazy"
+                    className="w-full h-64"
+                  ></iframe>
+                </div>
+              </div>
+            )}
             {business.mapa_embed_url && (
               <div className="mt-6">
                 <iframe
@@ -408,7 +671,8 @@ const BusinessDetailPage = () => {
             </div>
           </>
         )}
-        {plan === "pro" && (
+
+        {plan === "profesional" && (
           <>
             {business.imagen_url && (
               <img
@@ -512,32 +776,52 @@ const BusinessDetailPage = () => {
                 <p className="text-sm">{business.estadisticas}</p>
               </div>
             )}
+            {(business.plan_type === "profesional" ||
+              business.plan_type === "premium") &&
+              business.promociones && (
+                <div className="mt-8 p-4 rounded-lg bg-orange-100 border border-orange-300 shadow">
+                  <h3 className="text-xl font-semibold text-orange-800 mb-2">
+                    🎁 Promoción Especial
+                  </h3>
+                  <p className="text-gray-900">{business.promociones}</p>
+                </div>
+              )}
           </>
         )}
-        {/* Promociones: bloque visible si hay promociones activas */}
-        {promociones.length > 0 && (
-          <section className="mt-4">
-            <h2 className="text-xl font-bold text-orange-600">Promociones</h2>
-            {promociones.map((promo) => (
-              <div
-                key={promo.id}
-                className="border p-4 mt-2 rounded-lg shadow-sm"
-              >
-                <h3 className="font-semibold">{promo.titulo}</h3>
-                <p>{promo.descripcion}</p>
-                {promo.imagen_url && (
-                  <img
-                    src={promo.imagen_url}
-                    alt={promo.titulo}
-                    className="w-full max-w-xs mt-2 rounded-md"
-                  />
-                )}
-                <p className="text-sm text-gray-500">
-                  Vigencia: {promo.fecha_inicio} a {promo.fecha_fin}
-                </p>
-              </div>
-            ))}
-          </section>
+
+        {/* Promociones activas (sección única) */}
+        <section className="mt-10">
+          <h2 className="text-xl font-bold mt-10 mb-2 text-red-600">
+            🎉 Promociones activas
+          </h2>
+          <div className="flex flex-wrap gap-4">
+            {promocionesArray.length === 0 ? (
+              <p className="text-gray-500 w-full">
+                No hay promociones activas registradas.
+              </p>
+            ) : (
+              promocionesArray.map((promo) => (
+                <div
+                  key={promo.id}
+                  className="w-full sm:w-1/2 md:w-1/3 lg:w-1/4"
+                >
+                  <PromoCard promo={promo} contexto="detalle" />
+                </div>
+              ))
+            )}
+          </div>
+        </section>
+
+        {/* -------- NUEVO: Menú (al final) -------- */}
+        {shouldShowMenu && renderMenuBlock()}
+        {/* --------------------------------------- */}
+
+        {plan === "premium" && (
+          <div className="bg-green-50 border-l-4 border-green-500 text-green-800 p-4 rounded mt-10">
+            Este negocio cuenta con un plan <strong>Premium</strong>. Disfruta
+            de todos los beneficios: video, contacto directo, redes sociales y
+            más.
+          </div>
         )}
       </div>
     </>

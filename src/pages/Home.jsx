@@ -25,6 +25,16 @@ import { useToast } from "@/components/ui/use-toast";
 import { useSupabase } from "@/contexts/SupabaseContext";
 import { getFeaturedBusinesses } from "@/lib/database";
 
+// Elige la mejor imagen disponible para mostrar (evita que no salgan los destacados)
+const pickImage = (b) =>
+  b?.imagen_url ||
+  b?.cover_image_url ||
+  b?.portada_url ||
+  b?.business_cover_url ||
+  b?.logo_url ||
+  b?.image_url ||
+  null;
+
 const HomePage = () => {
   const { supabase } = useSupabase();
   const { toast } = useToast();
@@ -35,7 +45,7 @@ const HomePage = () => {
   const loadFeaturedBusinesses = useCallback(async () => {
     const data = await getFeaturedBusinesses(supabase);
     const approved = Array.isArray(data)
-      ? data.filter((b) => b.nombre && b.slug && b.imagen_url && b.is_approved)
+      ? data.filter((b) => b && b.is_approved && b.nombre && b.slug)
       : [];
     setFeaturedBusinesses(approved);
   }, [supabase]);
@@ -55,6 +65,10 @@ const HomePage = () => {
         variant: "destructive",
       });
     }
+  };
+
+  const goNearby = () => {
+    navigate("/negocios?sort=nearby");
   };
 
   const stats = [
@@ -109,22 +123,18 @@ const HomePage = () => {
                   Buscar <ArrowRight className="ml-2 h-5 w-5" />
                 </Button>
               </form>
-              <div className="flex flex-wrap gap-3">
-                {[
-                  { name: "Restaurantes", slug: "alimentos-y-bebidas" },
-                  { name: "Hoteles", slug: "hospedaje" },
-                  { name: "Servicios", slug: "servicios-del-hogar" },
-                  { name: "Comercios", slug: "moda-y-tiendas" },
-                ].map(({ name, slug }) => (
-                  <Link key={slug} to={`/negocios/categoria/${slug}`}>
-                    <Badge
-                      variant="outline"
-                      className="bg-white/10 text-white border-white/30 hover:bg-white/20 cursor-pointer transition-colors"
-                    >
-                      {name}
-                    </Badge>
-                  </Link>
-                ))}
+              <div className="flex items-center gap-3 mt-2">
+                <Button
+                  type="button"
+                  onClick={goNearby}
+                  className="bg-orange-600 hover:bg-orange-700 text-white font-semibold shadow-lg"
+                >
+                  <MapPin className="h-4 w-4 mr-2" />
+                  Cerca de mí
+                </Button>
+                <span className="text-sm text-white/90">
+                  A 1 km a la redonda
+                </span>
               </div>
             </motion.div>
             <motion.div
@@ -217,9 +227,14 @@ const HomePage = () => {
                 <Card key={b.slug}>
                   <CardHeader>
                     <img
-                      src={b.imagen_url}
+                      src={pickImage(b) || "/placeholder-card.png"}
                       alt={b.nombre}
                       className="w-full h-40 object-cover rounded-md"
+                      onError={(e) => {
+                        e.currentTarget.onerror = null;
+                        e.currentTarget.src =
+                          "https://raw.githubusercontent.com/lewix369/iztapamarket_directorio_2025/main/public/iztapamarket%20cover.png";
+                      }}
                     />
                   </CardHeader>
                   <CardContent>

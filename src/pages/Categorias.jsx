@@ -33,11 +33,15 @@ const Categorias = () => {
         console.error("Error al cargar negocios:", error);
       } else {
         console.log("🧪 Negocios desde Supabase:", data);
-        // Ordenar por tipo de plan: premium, profesional, free
+        // Normaliza el plan ("pro" -> "profesional") y ordena premium &gt; profesional &gt; free
+        const normalized = (data || []).map((n) => {
+          const p = (n.plan_type || "").toLowerCase().trim();
+          const plan_type = p === "pro" ? "profesional" : p;
+          return { ...n, plan_type };
+        });
         const orden = { premium: 1, profesional: 2, free: 3 };
-        // Ordenar negocios por tipo de plan
-        const ordenados = data.sort(
-          (a, b) => orden[a.plan_type] - orden[b.plan_type]
+        const ordenados = normalized.sort(
+          (a, b) => (orden[a.plan_type] || 99) - (orden[b.plan_type] || 99)
         );
         setNegocios(ordenados);
       }
@@ -50,7 +54,9 @@ const Categorias = () => {
   const filteredNegocios = negocios.filter((negocio) => {
     const matchesSearch =
       negocio.nombre.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      negocio.descripcion.toLowerCase().includes(searchTerm.toLowerCase());
+      (negocio.descripcion || "")
+        .toLowerCase()
+        .includes(searchTerm.toLowerCase());
     const matchesCategory =
       selectedCategory === "" || negocio.slug_categoria === selectedCategory;
     return matchesSearch && matchesCategory;
@@ -65,7 +71,11 @@ const Categorias = () => {
           icon: <Star className="w-4 h-4" />,
         };
       case "profesional":
-        return { text: "Pro", color: "bg-blue-500 text-white", icon: null };
+        return {
+          text: "Profesional",
+          color: "bg-blue-500 text-white",
+          icon: null,
+        };
       default:
         return { text: "Gratis", color: "bg-gray-500 text-white", icon: null };
     }

@@ -1,3 +1,6 @@
+// src/lib/database.js
+
+// ---------------- Reseñas ----------------
 export const createReview = async (supabase, businessId, reviewText) => {
   const { error } = await supabase
     .from("reviews")
@@ -9,70 +12,90 @@ export const createReview = async (supabase, businessId, reviewText) => {
   }
 };
 
+// ---------------- Aprobación ----------------
 export const updateApprovalStatus = async (supabase, businessId, status) => {
+  const patch =
+    status === true
+      ? { is_approved: true, is_deleted: false }
+      : { is_approved: false, is_deleted: true };
+
   const { error } = await supabase
     .from("negocios")
-    .update({ is_approved: status })
-    .eq("id", businessId)
-    .select();
+    .update({ ...patch, updated_at: new Date().toISOString() })
+    .eq("id", businessId); // return=minimal
 
   if (error) {
     console.error("Error al actualizar estado de aprobación:", error);
-    throw error;
+    return { data: null, error };
   }
-
-  console.log("✅ Estado de aprobación actualizado:", { businessId, status });
+  return { data: { id: businessId, ...patch }, error: null };
 };
 
+// ---------------- Búsquedas (público) ----------------
 export const searchBusinesses = async (supabase, query, planType, category) => {
-  let request = supabase
+  let q = supabase
     .from("negocios")
     .select("*")
     .eq("is_deleted", false)
     .eq("is_approved", true);
 
+  if (planType) q = q.eq("plan_type", String(planType).toLowerCase().trim());
+  if (category) q = q.eq("categoria", category);
+
   if (query) {
-    request = request.ilike("nombre", `%${query}%`);
+    const p = `%${query}%`;
+    q = q.or(
+      [
+        `nombre.ilike.${p}`,
+        `descripcion.ilike.${p}`,
+        `categoria.ilike.${p}`,
+        `slug.ilike.${p}`,
+      ].join(",")
+    );
   }
 
-  if (planType) {
-    request = request.eq("plan_type", planType);
-  }
-
-  if (category) {
-    request = request.eq("categoria", category);
-  }
-
-  const { data, error } = await request;
+  const { data, error } = await q.order("created_at", { ascending: false });
 
   if (error) {
     console.error("Error al buscar negocios:", error);
     return [];
   }
 
-  console.log("Resultados de búsqueda:", data);
-
-  return data;
+  return data || [];
 };
 
+// ---------------- Categorías (público) ----------------
 export const getDistinctCategories = async (supabase) => {
   const { data, error } = await supabase
     .from("negocios")
-    .select("categoria", { count: "exact", distinct: true })
-    .eq("is_deleted", false);
+    .select("categoria")
+    .eq("is_deleted", false)
+    .eq("is_approved", true);
 
   if (error) {
     console.error("Error al obtener categorías distintas:", error);
     return [];
   }
 
-  return data.map((item) => item.categoria);
+  return [
+    ...new Set(
+      (data || [])
+        .map((r) => (r?.categoria || "").toLowerCase().trim())
+        .filter(Boolean)
+    ),
+  ];
 };
 
+// ---------------- Crear / Actualizar / Eliminar ----------------
 export const createBusiness = async (supabase, businessData) => {
+  const payload = { ...businessData };
+  delete payload.id;
+  delete payload.created_at;
+  delete payload.updated_at;
+
   const { data, error } = await supabase
     .from("negocios")
-    .insert([{ ...businessData, is_approved: true }])
+    .insert([payload])
     .select()
     .single();
 
@@ -84,26 +107,35 @@ export const createBusiness = async (supabase, businessData) => {
     );
     return null;
   }
-
-  console.log("✅ Negocio creado con éxito:", data);
   return data;
 };
 
+// Soft delete
 export const softDeleteBusiness = async (supabase, businessId) => {
-  console.log("🗑 Eliminando definitivamente negocio con ID:", businessId);
+  const { error } = await supabase
+    .from("negocios")
+    .update({ is_deleted: true, updated_at: new Date().toISOString() })
+    .eq("id", businessId);
+
+  if (error) {
+    console.error("Error en soft delete:", error);
+    throw error;
+  }
+};
+
+// Hard delete
+export const deleteBusiness = async (supabase, businessId) => {
   const { error } = await supabase
     .from("negocios")
     .delete()
     .eq("id", businessId);
-
   if (error) {
     console.error("Error al hacer hard delete:", error);
     throw error;
   }
-
-  console.log("✅ Negocio eliminado completamente de la base de datos.");
 };
 
+// ---------------- Destacados ----------------
 export const getFeaturedBusinesses = async (supabase) => {
   const { data, error } = await supabase
     .from("negocios")
@@ -112,48 +144,66 @@ export const getFeaturedBusinesses = async (supabase) => {
     .eq("is_approved", true)
     .eq("is_featured", true);
 
-  if (error) {
-    console.error("Error al obtener negocios destacados:", error);
-    return [];
-  }
-
-  return data;
+  if (error) console.error("Error al obtener negocios destacados:", error);
+  return data || [];
 };
 
+// ---------------- Listados (admin/KPIs) ----------------
 export const getBusinesses = async (supabase) => {
   const { data, error } = await supabase
     .from("negocios")
     .select("*", { count: "exact" })
-    .eq("is_deleted", false)
-    .eq("is_approved", true)
     .order("created_at", { ascending: false });
 
   if (error) {
     console.error("Error al obtener negocios:", error);
     return [];
   }
-
-  console.log(data);
-  return data;
+  return data || [];
 };
 
+// 🔧 UPDATE robusto: return=minimal + select aparte + logs claros
 export const updateBusiness = async (supabase, businessId, updatedData) => {
-  const { data, error } = await supabase
+  const payload = { ...updatedData };
+  delete payload.id;
+  delete payload.created_at;
+  delete payload.updated_at;
+
+  console.log("▶️ PATCH negocios", { id: businessId, payload });
+
+  const { error } = await supabase
     .from("negocios")
-    .update(updatedData)
-    .eq("id", businessId)
-    .select()
-    .single();
+    .update({ ...payload, updated_at: new Date().toISOString() })
+    .eq("id", businessId); // return=minimal por defecto
 
   if (error) {
-    console.error("❌ Error al actualizar negocio:", error.message);
+    console.error("❌ PostgREST UPDATE error", {
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+      payload,
+    });
     throw error;
   }
 
-  console.log("✅ Negocio actualizado con éxito:", data);
+  const { data, error: fetchError } = await supabase
+    .from("negocios")
+    .select("*")
+    .eq("id", businessId)
+    .single();
+
+  if (fetchError) {
+    console.warn(
+      "⚠️ Update OK, pero falló el SELECT de confirmación:",
+      fetchError
+    );
+    return { id: businessId, ...payload };
+  }
   return data;
 };
 
+// Todos sin filtros
 export const getAllBusinesses = async (supabase) => {
   const { data, error } = await supabase
     .from("negocios")
@@ -164,21 +214,5 @@ export const getAllBusinesses = async (supabase) => {
     console.error("Error al obtener todos los negocios:", error);
     return [];
   }
-
-  return data;
-};
-
-export const deleteBusiness = async (supabase, businessId) => {
-  console.log("🗑 Eliminando definitivamente negocio con ID:", businessId);
-  const { error } = await supabase
-    .from("negocios")
-    .delete()
-    .eq("id", businessId);
-
-  if (error) {
-    console.error("Error al hacer hard delete:", error);
-    throw error;
-  }
-
-  console.log("✅ Negocio eliminado completamente de la base de datos.");
+  return data || [];
 };

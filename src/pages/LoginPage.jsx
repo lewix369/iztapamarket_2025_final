@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Helmet } from "react-helmet";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/lib/supabaseClient";
@@ -7,7 +8,9 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 
 const LoginPage = () => {
-  const [email, setEmail] = useState("");
+  const [searchParams] = useSearchParams();
+  const defaultEmail = searchParams.get("email") || "";
+  const [email, setEmail] = useState(defaultEmail);
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -31,14 +34,72 @@ const LoginPage = () => {
     } else {
       setEmail("");
       setPassword("");
-      const userId = data.user?.id;
+      // Mostrar el user_id autenticado por consola
+      const { data: userData, error: userError } =
+        await supabase.auth.getUser();
+      if (userData?.user?.id) {
+        console.log("✅ user_id:", userData.user.id);
+      } else {
+        console.error("❌ No se pudo obtener el user_id", userError);
+      }
+      const userId = String(userData?.user?.id).trim();
+      if (!userId) {
+        console.error("❌ userId no disponible");
+        alert("No se pudo autenticar correctamente.");
+        return;
+      }
+      // Log explícito tras obtener el userId
+      console.log("🧩 userId obtenido tras login:", userId);
       alert("✅ Inicio de sesión exitoso");
       if (userId) {
         const ADMIN_EMAIL = "luis.carrillo.laguna@gmail.com";
         if (email === ADMIN_EMAIL) {
           navigate("/admin");
         } else {
-          navigate("/mi-negocio");
+          // Depuración del tipo de userId
+          console.log("🔎 Tipo de userId:", typeof userId);
+          // Consulta de negocios con logs extendidos
+          const { data: negocios, error: negocioError } = await supabase
+            .from("negocios")
+            .select("*")
+            .eq("user_id", userId);
+          // Validación y logs para comparar userId vs user_id
+          if (negocios && negocios.length > 0) {
+            console.log("✅ user_id negocio:", negocios[0].user_id);
+            console.log("🧩 Comparando con:", userId);
+          }
+
+          console.log("🧠 userId:", userId);
+          console.log("📦 Resultado negocios:", negocios);
+          console.log("🐞 Error en negocios:", negocioError);
+
+          if (negocioError) {
+            console.error("❌ Error al obtener el negocio:", negocioError);
+            alert("❌ Error en la consulta de negocios.");
+            navigate("/");
+            return;
+          }
+
+          if (!negocios || negocios.length === 0) {
+            console.warn(
+              "⚠️ No se encontró ningún negocio asociado al user_id:",
+              userId
+            );
+            alert("❌ No tienes un negocio registrado todavía.");
+            navigate("/");
+            return;
+          }
+
+          const negocio = negocios[0];
+          console.log("✅ Negocio encontrado:", negocio);
+          const plan = negocio.plan_type;
+
+          if (plan === "pro" || plan === "premium") {
+            navigate("/mi-negocio");
+          } else {
+            alert("Tu plan actual no tiene acceso a esta sección.");
+            navigate("/");
+          }
         }
       }
     }

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Menu, X, Store, User, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabaseClient";
@@ -9,6 +9,7 @@ import { useSession } from "@/contexts/SessionContext";
 const Header = () => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const location = useLocation();
+  const navigate = useNavigate();
   const { toast } = useToast();
 
   const { user } = useSession();
@@ -28,7 +29,8 @@ const Header = () => {
   }, []);
 
   const handleInstallClick = () => {
-    if (deferredPrompt) {
+    const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+    if (deferredPrompt && !isIOS) {
       deferredPrompt.prompt();
       deferredPrompt.userChoice.then((choiceResult) => {
         if (choiceResult.outcome === "accepted") {
@@ -39,10 +41,14 @@ const Header = () => {
         setDeferredPrompt(null);
       });
     } else {
+      // Sin prompt disponible (o iOS): lleva a la guía de instalación
+      navigate("/descargar");
+      // Además muestra un toast amable (no bloqueante)
       toast({
         title: "ℹ️ Cómo instalar IztapaMarket",
-        description:
-          "Desde tu navegador, selecciona 'Agregar a pantalla de inicio'.",
+        description: isIOS
+          ? "En iPhone/iPad: toca Compartir → 'Añadir a pantalla de inicio'."
+          : "Si tu navegador no muestra el diálogo, sigue los pasos en la página.",
       });
     }
   };
@@ -138,14 +144,14 @@ const Header = () => {
               </Button>
             </Link>
 
-            <Link to="/descargar">
-              <Button
-                size="sm"
-                className="bg-blue-600 hover:bg-blue-700 text-white"
-              >
-                Descargar App
-              </Button>
-            </Link>
+            <Button
+              size="sm"
+              onClick={handleInstallClick}
+              className="bg-blue-600 hover:bg-blue-700 text-white"
+              title="Instalar la app en tu dispositivo"
+            >
+              Descargar App
+            </Button>
           </div>
 
           <Button
@@ -175,22 +181,42 @@ const Header = () => {
                     : []),
                   { path: "/registro/free", label: "Registrar Negocio" },
                   { path: "/descargar", label: "Descargar App" },
-                ].map(({ path, label }) => (
-                  <Link
-                    key={path}
-                    to={path}
-                    className={`block py-2 font-medium transition-colors ${
-                      isActive(path)
-                        ? path === "/planes"
-                          ? "text-orange-600"
-                          : "text-blue-600"
-                        : "text-gray-700"
-                    }`}
-                    onClick={() => setIsMenuOpen(false)}
-                  >
-                    {label}
-                  </Link>
-                ))}
+                ].map(({ path, label }) => {
+                  if (path === "/descargar") {
+                    return (
+                      <button
+                        key={path}
+                        type="button"
+                        className={`block w-full text-left py-2 font-medium transition-colors ${
+                          isActive(path) ? "text-blue-600" : "text-gray-700"
+                        }`}
+                        onClick={() => {
+                          setIsMenuOpen(false);
+                          handleInstallClick();
+                        }}
+                        title="Instalar la app en tu dispositivo"
+                      >
+                        {label}
+                      </button>
+                    );
+                  }
+                  return (
+                    <Link
+                      key={path}
+                      to={path}
+                      className={`block py-2 font-medium transition-colors ${
+                        isActive(path)
+                          ? path === "/planes"
+                            ? "text-orange-600"
+                            : "text-blue-600"
+                          : "text-gray-700"
+                      }`}
+                      onClick={() => setIsMenuOpen(false)}
+                    >
+                      {label}
+                    </Link>
+                  );
+                })}
               </nav>
 
               <div className="pt-4 border-t">

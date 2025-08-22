@@ -56,7 +56,7 @@ const Precios = () => {
         "Sin galería de imágenes",
         "Sin mapa integrado",
         "Sin estadísticas",
-        "Posicionamiento básico",
+        "Posicionamiento SEO básico",
       ],
     },
     {
@@ -70,7 +70,7 @@ const Precios = () => {
       popular: true,
       features: [
         "Todo lo del plan Free",
-        "Hasta 10 fotografías",
+        "Hasta 5 fotografías",
         "Enlaces a redes sociales",
         "Horarios detallados",
         "Mapa integrado de Google",
@@ -96,9 +96,12 @@ const Precios = () => {
         "Todo lo del plan Profesional",
         "Multimedia ilimitado",
         "Videos promocionales",
-        "Posicionamiento destacado",
-        "Sitio web básico incluido",
+        "Optimización SEO on-page avanzada para mejorar la visibilidad en buscadores",
+        "Página web básica (landing de 1 página)",
+        "Incluye tus datos, fotos y contacto alojados por IztapaMarket",
         "Integración con redes sociales",
+        "Crear logo con IA (incluido)",
+        "Crear portada con IA (incluido)",
         "Estadísticas avanzadas",
         "Soporte 24/7",
         "Promociones ilimitadas",
@@ -335,7 +338,7 @@ const Precios = () => {
                       Número de imágenes
                     </td>
                     <td className="px-6 py-4 text-center">1</td>
-                    <td className="px-6 py-4 text-center">10</td>
+                    <td className="px-6 py-4 text-center">5</td>
                     <td className="px-6 py-4 text-center">Ilimitadas</td>
                   </tr>
                   <tr className="hover:bg-gray-50">
@@ -356,7 +359,31 @@ const Precios = () => {
                   </tr>
                   <tr className="hover:bg-gray-50">
                     <td className="px-6 py-4 font-medium text-gray-900">
+                      Página web básica (landing de 1 página)
+                    </td>
+                    <td className="px-6 py-4 text-center">❌</td>
+                    <td className="px-6 py-4 text-center">❌</td>
+                    <td className="px-6 py-4 text-center">✅</td>
+                  </tr>
+                  <tr className="hover:bg-gray-50">
+                    <td className="px-6 py-4 font-medium text-gray-900">
                       Videos
+                    </td>
+                    <td className="px-6 py-4 text-center">❌</td>
+                    <td className="px-6 py-4 text-center">❌</td>
+                    <td className="px-6 py-4 text-center">✅</td>
+                  </tr>
+                  <tr className="hover:bg-gray-50">
+                    <td className="px-6 py-4 font-medium text-gray-900">
+                      Logo con IA
+                    </td>
+                    <td className="px-6 py-4 text-center">❌</td>
+                    <td className="px-6 py-4 text-center">❌</td>
+                    <td className="px-6 py-4 text-center">✅</td>
+                  </tr>
+                  <tr className="hover:bg-gray-50">
+                    <td className="px-6 py-4 font-medium text-gray-900">
+                      Portada con IA
                     </td>
                     <td className="px-6 py-4 text-center">❌</td>
                     <td className="px-6 py-4 text-center">❌</td>
@@ -372,7 +399,7 @@ const Precios = () => {
                   </tr>
                   <tr className="hover:bg-gray-50">
                     <td className="px-6 py-4 font-medium text-gray-900">
-                      Posicionamiento
+                      Posicionamiento SEO
                     </td>
                     <td className="px-6 py-4 text-center">Básico</td>
                     <td className="px-6 py-4 text-center">Mejorado</td>

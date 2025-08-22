@@ -28,14 +28,14 @@ import {
 } from "@/components/ui/dropdown-menu";
 
 const AdminBusinessTable = ({
-  businesses,
-  onApprove,
-  onReject,
-  onDelete,
-  onEdit,
+  businesses = [],
+  onApprove = () => {},
+  onReject = () => {},
+  onDelete = () => {},
+  onEdit = () => {},
 }) => {
   const getStatus = (business) => {
-    if (business.is_deleted) {
+    if (business?.is_deleted) {
       return (
         <Badge variant="destructive" className="italic">
           Eliminado
@@ -43,7 +43,19 @@ const AdminBusinessTable = ({
       );
     }
 
-    if (business.is_approved === true) {
+    const approved =
+      business?.is_approved === true ||
+      business?.status === true ||
+      (typeof business?.estado === "string" &&
+        business.estado.toLowerCase() === "aprobado");
+
+    const rejected =
+      business?.is_approved === false ||
+      business?.status === false ||
+      (typeof business?.estado === "string" &&
+        business.estado.toLowerCase() === "rechazado");
+
+    if (approved) {
       return (
         <Badge
           variant="outline"
@@ -55,7 +67,7 @@ const AdminBusinessTable = ({
       );
     }
 
-    if (business.is_approved === false) {
+    if (rejected) {
       return (
         <Badge variant="destructive">
           <XCircle className="mr-1 h-3 w-3" />
@@ -117,8 +129,8 @@ const AdminBusinessTable = ({
                   {business.categoria}
                 </TableCell>
                 <TableCell className="hidden lg:table-cell">
-                  <Badge variant={getPlanVariant(business.plan_type)}>
-                    {business.plan_type}
+                  <Badge variant={getPlanVariant(business?.plan_type)}>
+                    {business?.plan_type || "—"}
                   </Badge>
                 </TableCell>
                 <TableCell>{getStatus(business)}</TableCell>
@@ -126,7 +138,9 @@ const AdminBusinessTable = ({
                   {business.telefono || "N/A"}
                 </TableCell>
                 <TableCell className="hidden lg:table-cell">
-                  {new Date(business.created_at).toLocaleDateString()}
+                  {business?.created_at
+                    ? new Date(business.created_at).toLocaleDateString()
+                    : "—"}
                 </TableCell>
                 <TableCell>
                   <DropdownMenu>

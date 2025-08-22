@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 
-const SessionContext = createContext();
+export const SessionContext = createContext();
 
 export const SessionProvider = ({ children }) => {
   const [user, setUser] = useState(undefined); // undefined = cargando
@@ -26,8 +26,10 @@ export const SessionProvider = ({ children }) => {
 
     const { data: listener } = supabase.auth.onAuthStateChange(
       async (_, session) => {
+        console.log("🔄 Cambio de sesión detectado:", session);
         setUser(session?.user || null);
         setSession(session || null);
+        setLoading(false);
       }
     );
 

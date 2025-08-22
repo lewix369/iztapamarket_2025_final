@@ -1,44 +1,56 @@
-const CACHE_NAME = "iztapamarket-cache-v1";
+// sube versión para invalidar SW viejo
+const CACHE_NAME = "iztapamarket-cache-v2";
 const PRECACHE_URLS = ["/", "/index.html", "/manifest.json"];
 
 self.addEventListener("install", (event) => {
-  console.log("[ServiceWorker] Instalando y haciendo precache...");
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(PRECACHE_URLS);
-    })
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_URLS))
   );
   self.skipWaiting();
 });
 
 self.addEventListener("activate", (event) => {
-  console.log("[ServiceWorker] Activado");
   event.waitUntil(
-    caches.keys().then((cacheNames) =>
-      Promise.all(
-        cacheNames.map((cacheName) => {
-          if (cacheName !== CACHE_NAME) {
-            return caches.delete(cacheName);
-          }
-        })
+    caches
+      .keys()
+      .then((names) =>
+        Promise.all(
+          names.map((n) => (n !== CACHE_NAME ? caches.delete(n) : null))
+        )
       )
-    )
   );
-  return self.clients.claim();
+  self.clients.claim();
 });
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
 
+  // 👇 SPA: para navegaciones, devolver siempre el app shell
+  if (event.request.mode === "navigate") {
+    event.respondWith(
+      caches.match("/index.html").then((cached) => {
+        return (
+          cached ||
+          fetch("/index.html").catch(
+            () =>
+              new Response("", { status: 504, statusText: "Gateway Timeout" })
+          )
+        );
+      })
+    );
+    return;
+  }
+
+  // assets y API: cache-first simple
   event.respondWith(
     caches.match(event.request).then((response) => {
       return (
         response ||
-        fetch(event.request).catch(() => {
-          if (event.request.destination === "document") {
-            return caches.match("/offline.html");
-          }
-        })
+        fetch(event.request).catch(() =>
+          event.request.destination === "document"
+            ? caches.match("/index.html")
+            : undefined
+        )
       );
     })
   );

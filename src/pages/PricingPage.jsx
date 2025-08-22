@@ -46,8 +46,14 @@ const PricingPage = () => {
   const navigate = useNavigate();
 
   const handleSelectPlan = (planTitle) => {
-    const planParam = encodeURIComponent(planTitle);
-    navigate(`/registrar?plan=${planParam}`);
+    const normalizedTitle = planTitle.toLowerCase();
+    if (normalizedTitle.includes("intermedio")) {
+      navigate("/checkout?plan=pro");
+    } else if (normalizedTitle.includes("premium")) {
+      navigate("/checkout?plan=premium");
+    } else {
+      navigate("/registro?plan=free");
+    }
   };
 
   return (

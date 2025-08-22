@@ -1,7 +1,8 @@
 {
-  "rewrites": [
-    { "source": "/categorias/:slug*", "destination": "/" },
-    { "source": "/negocio/:slug*", "destination": "/" },
-    { "source": "/registro/:plan*", "destination": "/" }
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "routes": [
+    { "handle": "filesystem" },
+    { "src": "/.*", "dest": "/index.html" }
   ]
 }

@@ -1,38 +1,69 @@
+// @ts-ignore
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
+};
+
 serve(async (req) => {
+  // ✅ Preflight CORS
+  if (req.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: corsHeaders });
+  }
+
+  // ✅ Solo permitimos POST (además de OPTIONS)
+  if (req.method !== "POST") {
+    return new Response("Method Not Allowed", {
+      status: 405,
+      headers: corsHeaders,
+    });
+  }
+
   try {
     const { nombre, categoria, servicios } = await req.json();
+    console.log("✅ Solicitud recibida:", { nombre, categoria, servicios });
 
-    const prompt = `Genera una descripción breve y atractiva para un negocio llamado "${nombre}", que pertenece a la categoría "${categoria}" y ofrece los siguientes servicios: ${servicios}. La descripción debe tener un máximo de 500 caracteres.`;
+    // Validar campos obligatorios
+    if (!nombre || !categoria || !servicios) {
+      console.warn("⚠️ Faltan campos obligatorios");
+      return new Response(
+        JSON.stringify({ error: "Faltan campos obligatorios." }),
+        {
+          status: 400,
+          headers: {
+            "Content-Type": "application/json",
+            ...corsHeaders,
+          },
+        }
+      );
+    }
 
-    const aiResponse = await fetch(
-      "https://api.openai.com/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${Deno.env.get("OPENAI_API_KEY")}`,
-        },
-        body: JSON.stringify({
-          model: "gpt-4",
-          messages: [{ role: "user", content: prompt }],
-        }),
-      }
-    );
+    // Descripción generada
+    const descripcionGenerada = `${nombre} es una marca reconocida en el sector de ${categoria}. Su propuesta de valor se basa en ofrecer ${servicios}, diferenciándose por su atención personalizada, enfoque en la experiencia del cliente y soluciones innovadoras. Ideal para quienes buscan calidad, confianza y un servicio pensado desde una visión profesional y estratégica.`;
 
-    const aiData = await aiResponse.json();
-    const textoGenerado = aiData.choices?.[0]?.message?.content?.trim();
+    console.log("🧠 Descripción generada:", descripcionGenerada);
 
-    return new Response(JSON.stringify({ descripcion: textoGenerado }), {
-      headers: { "Content-Type": "application/json" },
+    return new Response(JSON.stringify({ descripcion: descripcionGenerada }), {
       status: 200,
+      headers: {
+        "Content-Type": "application/json",
+        ...corsHeaders,
+      },
     });
   } catch (error) {
-    console.error("Error generando descripción:", error);
+    console.error("❌ Error al procesar:", error);
     return new Response(
-      JSON.stringify({ error: "No se pudo generar la descripción" }),
-      { status: 500 }
+      JSON.stringify({ error: "No se pudo procesar la solicitud" }),
+      {
+        status: 500,
+        headers: {
+          "Content-Type": "application/json",
+          ...corsHeaders,
+        },
+      }
     );
   }
 });
