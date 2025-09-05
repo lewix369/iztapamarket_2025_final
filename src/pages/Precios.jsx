@@ -8,11 +8,9 @@ import {
   Gift,
   ArrowRight,
   Phone,
-  MapPin,
-  Camera,
-  Globe,
   BarChart3,
   Megaphone,
+  Globe,
   Headphones,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -21,15 +19,24 @@ import { useToast } from "@/components/ui/use-toast";
 const Precios = () => {
   const { toast } = useToast();
 
+  // Normaliza nombre visual -> id de plan
+  const toPlanId = (name) =>
+    name === "Free" ? "free" : name === "Profesional" ? "pro" : "premium";
+
+  // Redirecciones correctas (NADA de MP aquí)
   const handlePlanClick = (planName) => {
-    if (planName === "Free") {
-      // Redirigir al registro para plan gratuito
-      window.location.href = "/registro?plan=free";
-    } else if (planName === "Profesional") {
-      window.location.href = "/registro?plan=pro";
-    } else if (planName === "Premium") {
-      window.location.href = "/registro?plan=premium";
+    const planId = toPlanId(planName);
+    const email = (localStorage.getItem("correo_negocio") || "").trim();
+    const emailQS = email ? `&email=${encodeURIComponent(email)}` : "";
+
+    if (planId === "free") {
+      // Siempre al formulario Free
+      window.location.href = "/registro/free";
+      return;
     }
+
+    // Pro/Premium: primero capturamos/confirmamos correo en /registro
+    window.location.href = `/registro?plan=${planId}${emailQS}`;
   };
 
   const planes = [
@@ -138,9 +145,9 @@ const Precios = () => {
 
   return (
     <div className="min-h-screen py-20">
-      {/* Hero Section */}
+      {/* Hero */}
       <section className="relative bg-gradient-to-br from-[#003366] via-[#1e40af] to-[#f97316] text-white py-20 overflow-hidden">
-        <div className="absolute inset-0 bg-black/20"></div>
+        <div className="absolute inset-0 bg-black/20" />
         <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -163,7 +170,7 @@ const Precios = () => {
         </div>
       </section>
 
-      {/* Planes Section */}
+      {/* Tarjetas */}
       <section className="py-20 bg-gradient-to-br from-gray-50 to-blue-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -241,6 +248,7 @@ const Precios = () => {
                     </div>
                   )}
 
+                  {/* Botón según plan */}
                   <Button
                     onClick={() => handlePlanClick(plan.name)}
                     className={`w-full ${plan.buttonColor} text-white font-bold py-4 text-lg rounded-xl shadow-lg hover:shadow-xl transition-all duration-300`}
@@ -261,7 +269,7 @@ const Precios = () => {
         </div>
       </section>
 
-      {/* Beneficios Adicionales */}
+      {/* Beneficios */}
       <section className="py-20 bg-white">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <motion.div
@@ -300,7 +308,7 @@ const Precios = () => {
         </div>
       </section>
 
-      {/* Comparación de Planes */}
+      {/* Comparación */}
       <section className="py-20 bg-gradient-to-br from-gray-50 to-blue-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <motion.div
@@ -420,67 +428,6 @@ const Precios = () => {
         </div>
       </section>
 
-      {/* FAQ Section */}
-      <section className="py-20 bg-white">
-        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6 }}
-            className="text-center mb-16"
-          >
-            <h2 className="text-4xl font-bold text-[#003366] mb-4">
-              Preguntas Frecuentes
-            </h2>
-            <p className="text-xl text-gray-600">
-              Resolvemos tus dudas sobre nuestros planes
-            </p>
-          </motion.div>
-
-          <div className="space-y-8">
-            <div className="bg-gradient-to-br from-blue-50 to-orange-50 rounded-xl p-6">
-              <h3 className="text-lg font-bold text-[#003366] mb-2">
-                ¿Puedo cambiar de plan en cualquier momento?
-              </h3>
-              <p className="text-gray-700">
-                Sí, puedes actualizar o degradar tu plan en cualquier momento.
-                Los cambios se aplicarán en tu próximo ciclo de facturación.
-              </p>
-            </div>
-
-            <div className="bg-gradient-to-br from-blue-50 to-orange-50 rounded-xl p-6">
-              <h3 className="text-lg font-bold text-[#003366] mb-2">
-                ¿Hay permanencia mínima?
-              </h3>
-              <p className="text-gray-700">
-                No, no hay permanencia mínima. Puedes cancelar tu suscripción en
-                cualquier momento sin penalizaciones.
-              </p>
-            </div>
-
-            <div className="bg-gradient-to-br from-blue-50 to-orange-50 rounded-xl p-6">
-              <h3 className="text-lg font-bold text-[#003366] mb-2">
-                ¿Qué métodos de pago aceptan?
-              </h3>
-              <p className="text-gray-700">
-                Aceptamos tarjetas de crédito y débito, transferencias bancarias
-                y pagos en OXXO a través de Mercado Pago.
-              </p>
-            </div>
-
-            <div className="bg-gradient-to-br from-blue-50 to-orange-50 rounded-xl p-6">
-              <h3 className="text-lg font-bold text-[#003366] mb-2">
-                ¿Ofrecen descuentos por pagos anuales?
-              </h3>
-              <p className="text-gray-700">
-                Sí, ofrecemos 2 meses gratis al pagar anualmente. Contáctanos
-                para más información sobre esta promoción.
-              </p>
-            </div>
-          </div>
-        </div>
-      </section>
-
       {/* CTA Final */}
       <section className="py-20 bg-gradient-to-br from-[#003366] to-[#f97316] text-white">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
@@ -496,16 +443,16 @@ const Precios = () => {
               Únete a cientos de negocios que ya confían en IztapaMarket
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
+              {/* CTA fijo al Free */}
               <Button
-                asChild
                 size="lg"
                 className="bg-white text-[#003366] hover:bg-gray-100 font-semibold px-8 py-4 text-lg"
+                onClick={() => handlePlanClick("Free")}
               >
-                <Link to="/registro">
-                  Comenzar Gratis
-                  <ArrowRight className="w-5 h-5 ml-2" />
-                </Link>
+                Comenzar Gratis
+                <ArrowRight className="w-5 h-5 ml-2" />
               </Button>
+
               <Button
                 variant="outline"
                 size="lg"

@@ -5,6 +5,7 @@ import {
   Route,
   useLocation,
   Navigate,
+  useParams,
 } from "react-router-dom";
 
 import Home from "@/pages/Home";
@@ -36,11 +37,21 @@ import DebugUser from "@/components/DebugUser";
 import PaySuccess from "@/pages/PaySuccess";
 import PayFailure from "@/pages/PayFailure";
 import PayPending from "@/pages/PayPending";
+import Checkout from "@/pages/Checkout";
 
 function RedirectRegisterBusiness() {
   // Mantén todos los query params (plan, email, status, etc.)
   const q = window.location.search || "";
   return <Navigate to={`/registro${q}`} replace />;
+}
+
+function RedirectRegisterTier() {
+  // e.g. /registro/free -> /registro?plan=free (preserva otros query params)
+  const { tier } = useParams();
+  const q = new URLSearchParams(window.location.search);
+  if (!q.get("plan") && tier) q.set("plan", tier.toLowerCase());
+  const qs = q.toString();
+  return <Navigate to={`/registro${qs ? `?${qs}` : ""}`} replace />;
 }
 
 function App() {
@@ -54,21 +65,31 @@ function App() {
 
 function Layout() {
   const location = useLocation();
-  const hideHeaderFooterRoutes = ["/admin"];
+  const hideHeaderFooterRoutes = ["/admin", "/auth/callback"];
+  const shouldHide = hideHeaderFooterRoutes.some((p) =>
+    location.pathname.startsWith(p)
+  );
 
   return (
     <>
-      {!hideHeaderFooterRoutes.includes(location.pathname) && <Header />}
+      {!shouldHide && <Header />}
       <main className="flex-grow">
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/negocios" element={<BusinessListPage />} />
           <Route path="/negocios/:slug" element={<CategoryBusinessesPage />} />
           <Route path="/negocio/:slug" element={<BusinessDetailPage />} />
+          <Route path="/precios" element={<Precios />} />
           <Route path="/planes" element={<Precios />} />
+          <Route path="/checkout" element={<Checkout />} />
+          <Route path="/pago/success" element={<PaySuccess />} />
+          <Route path="/pago/failure" element={<PayFailure />} />
+          <Route path="/pago/pending" element={<PayPending />} />
 
           {/* RUTA DE REGISTRO OFICIAL */}
           <Route path="/registro" element={<RegisterBusinessPage />} />
+
+          <Route path="/registro/:tier" element={<RedirectRegisterTier />} />
 
           {/* COMPATIBILIDAD: redirigimos la vieja ruta */}
           <Route
@@ -80,6 +101,10 @@ function Layout() {
           <Route path="/registro-exitoso" element={<PaySuccess />} />
           <Route path="/registro-error" element={<PayFailure />} />
           <Route path="/registro-pendiente" element={<PayPending />} />
+          {/* Aliases para callbacks directos de Mercado Pago */}
+          <Route path="/pay-success" element={<PaySuccess />} />
+          <Route path="/pay-failure" element={<PayFailure />} />
+          <Route path="/pay-pending" element={<PayPending />} />
           <Route
             path="/registro-free-success"
             element={<RegistroFreeSuccess />}
@@ -122,7 +147,7 @@ function Layout() {
           <Route path="/debug-user" element={<DebugUser />} />
         </Routes>
       </main>
-      {!hideHeaderFooterRoutes.includes(location.pathname) && <Footer />}
+      {!shouldHide && <Footer />}
       <ToastContainer position="top-center" autoClose={3000} />
     </>
   );
