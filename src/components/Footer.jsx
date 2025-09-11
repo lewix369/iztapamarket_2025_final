@@ -39,21 +39,29 @@ const Footer = () => {
             </p>
             <div className="flex space-x-4">
               <a
-                href="https://www.facebook.com/share/1MY6fYQhRV/?mibextid=wwXIfr"
+                href="https://www.facebook.com/iztapamarket"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="p-2 bg-blue-600 rounded-full hover:bg-blue-700 transition-colors"
+                aria-label="Facebook de IztapaMarket"
               >
                 <Facebook className="h-4 w-4" />
               </a>
-              <div className="p-2 bg-pink-600 rounded-full hover:bg-pink-700 transition-colors cursor-pointer">
+              <a
+                href="https://www.instagram.com/iztapamarket"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="p-2 bg-pink-600 rounded-full hover:bg-pink-700 transition-colors"
+                aria-label="Instagram de IztapaMarket"
+              >
                 <Instagram className="h-4 w-4" />
-              </div>
+              </a>
               <a
                 href="https://www.tiktok.com/@iztapamarket"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="p-2 bg-black rounded-full hover:bg-gray-800 transition-colors"
+                aria-label="TikTok de IztapaMarket"
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
