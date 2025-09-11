@@ -6,10 +6,16 @@
     "node": ">=18.0.0"
   },
   "scripts": {
-    "dev": "vite",
+    "dev:frontend": "vite --port 5173 --strictPort",
+    "dev:backend:local": "DOTENV_CONFIG_PATH=.env.local node server.mjs",
+    "dev:backend": "DOTENV_CONFIG_PATH=.env.production node server.mjs",
+    "dev": "concurrently -n FRONT,BACK -c green,blue \"npm run dev:frontend\" \"npm run dev:backend\"",
     "build": "vite build",
     "preview": "vite preview",
-    "backend": "node src/lib/backend/server.cjs"
+    "backend": "node server.mjs",
+    "start:backend": "DOTENV_CONFIG_PATH=.env.production node server.mjs",
+    "start": "npm run dev",
+    "dev:clean": "pkill -f 'vercel dev' || true && pkill -f vite || true && npx vercel dev --listen=3003"
   },
   "dependencies": {
     "@mercadopago/sdk-react": "^1.0.3",
@@ -33,6 +39,7 @@
     "clsx": "^2.0.0",
     "cors": "^2.8.5",
     "dotenv": "^17.2.0",
+    "dotenv-expand": "^12.0.2",
     "express": "^5.1.0",
     "framer-motion": "^10.16.4",
     "lucide-react": "^0.285.0",
@@ -54,8 +61,10 @@
     "@types/node": "^20.8.3",
     "@types/react": "^18.2.15",
     "@types/react-dom": "^18.2.7",
+    "@vercel/node": "^5.3.21",
     "@vitejs/plugin-react": "^4.0.3",
     "autoprefixer": "^10.4.16",
+    "concurrently": "^9.2.0",
     "eslint": "^8.57.1",
     "eslint-config-react-app": "^7.0.1",
     "postcss": "^8.4.31",

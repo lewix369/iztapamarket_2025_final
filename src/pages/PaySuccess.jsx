@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { useSearchParams, Link } from "react-router-dom";
+import { useSearchParams, Link, useNavigate } from "react-router-dom";
 import { createClient } from "@supabase/supabase-js";
 
 export default function PaySuccess() {
+  const navigate = useNavigate();
   const [params] = useSearchParams();
 
   // Query params que llegan de MP en back_urls (o del FREE redirect)
@@ -298,162 +299,92 @@ export default function PaySuccess() {
     };
   }, [API_BASE, payment_id, merchant_order_id, external_reference, isFree]);
 
-  // 2) Registro en Supabase (FREE => status_pago "free"; PRO/PREMIUM => "approved")
+  // 2) Registro/Upsert en Supabase + redirección al formulario
   useEffect(() => {
     let cancelled = false;
 
-    async function register() {
-      if (verified !== "approved") return;
+    async function upsertProfileAndRedirect({ plan, email, paidFlag }) {
+      if (!supabase) return;
+      if (!email) return;
+      const now = new Date().toISOString();
+      try {
+        await supabase
+          .from("profiles")
+          .upsert(
+            { email: email.toLowerCase(), plan_type: plan, updated_at: now },
+            { onConflict: "email" }
+          );
+      } catch (e) {
+        console.warn("profiles upsert warn:", e?.message || e);
+      }
+
+      // Guardar por si el usuario regresa
+      try {
+        localStorage.setItem("reg_email", email.toLowerCase());
+        localStorage.setItem("reg_plan", plan);
+      } catch {}
+
+      const qs = new URLSearchParams({ plan, email });
+      if (paidFlag) qs.set("paid", paidFlag);
+      // Nota: usamos replace para no dejar al usuario en /pago/success al volver atrás
+      navigate(`/registro?${qs.toString()}`, { replace: true });
+    }
+
+    async function run() {
+      if (verified !== "approved") return; // solo actuamos con pago/aprobado/free
       if (!supabase) {
         setRegMsg("Supabase no configurado en el frontend.");
         return;
       }
 
-      try {
-        // Derivar email / plan / monto desde múltiples fuentes
-        const payerEmail =
-          emailParam ||
-          extEmail ||
-          localStorage.getItem("correo_negocio") ||
-          details?.payer?.email ||
-          details?.additional_info?.payer?.email ||
-          "";
+      // Resolver email
+      const payerEmail = (
+        emailParam ||
+        extEmail ||
+        localStorage.getItem("reg_email") ||
+        localStorage.getItem("correo_negocio") ||
+        details?.payer?.email ||
+        details?.additional_info?.payer?.email ||
+        ""
+      )
+        .trim()
+        .toLowerCase();
 
-        // Plan
-        const title0 = details?.additional_info?.items?.[0]?.title || "";
-        const inferredPlan = title0.toLowerCase().includes("premium")
-          ? "premium"
-          : "pro";
-        const plan = isFree ? "free" : planParam || extPlan || inferredPlan;
+      // Resolver plan
+      const title0 = details?.additional_info?.items?.[0]?.title || "";
+      const inferredFromTitle = title0.toLowerCase().includes("premium")
+        ? "premium"
+        : "pro";
+      const planDetected = isFree
+        ? "free"
+        : (planParam || extPlan || inferredFromTitle || "pro").toLowerCase();
 
-        // monto
-        const monto = isFree
-          ? 0
-          : Number.isFinite(
-              details?.transaction_amount ??
-                details?.payments?.[0]?.transaction_amount
-            )
-          ? Number(
-              details?.transaction_amount ??
-                details?.payments?.[0]?.transaction_amount
-            )
-          : Number(localStorage.getItem("monto_negocio") || 0) || 0;
-
-        // pago_id
-        const pagoId = isFree
-          ? `FREE-${tagParam || Date.now()}`
-          : details?.id ||
-            details?.payments?.[0]?.id ||
-            payment_id ||
-            "DESCONOCIDO";
-
-        // Evitar duplicados por pago_id
-        {
-          const { data: exists } = await supabase
-            .from("negocios")
-            .select("id, email, pago_id")
-            .eq("pago_id", pagoId)
-            .maybeSingle();
-
-          if (exists) {
-            setRegMsg("Negocio ya estaba registrado (pago_id existente).");
-            await linkOwnerIfLoggedIn(supabase, exists.id);
-            return;
-          }
+      // FREE => upsert inmediato + redirect sin paid
+      if (isFree) {
+        setRegMsg("¡Plan FREE activado!");
+        if (!cancelled) {
+          await upsertProfileAndRedirect({ plan: "free", email: payerEmail });
         }
+        return;
+      }
 
-        // Datos del negocio desde localStorage como respaldo
-        const nombreLocal =
-          localStorage.getItem("nombre_negocio") ||
-          details?.additional_info?.payer?.first_name ||
-          "Negocio test";
-        const descripcionLocal =
-          localStorage.getItem("descripcion_negocio") || "";
-        const categoriaLocal = localStorage.getItem("categoria_negocio") || "";
-        const telefonoLocal = localStorage.getItem("telefono_negocio") || "";
-        const direccionLocal = localStorage.getItem("direccion_negocio") || "";
-        const imagenUrlLocal = localStorage.getItem("imagen_url") || "";
-        const mapaEmbedUrlLocal = localStorage.getItem("mapa_embed_url") || "";
-        const menuLocal = localStorage.getItem("menu") || "";
-        const instagramLocal = localStorage.getItem("instagram") || "";
-        const facebookLocal = localStorage.getItem("facebook") || "";
-        const hoursLocal = localStorage.getItem("hours") || "";
-        const servicesLocal = localStorage.getItem("services") || "";
-        const logoUrlLocal = localStorage.getItem("logo_url") || "";
-        const webLocal = localStorage.getItem("web") || "";
-        const videoEmbedUrlLocal =
-          localStorage.getItem("video_embed_url") || "";
-        const whatsappLocal = localStorage.getItem("whatsapp") || "";
-
-        const insertPayload = {
-          nombre: nombreLocal,
-          descripcion: descripcionLocal,
-          categoria: categoriaLocal,
-          telefono: telefonoLocal,
-          direccion: direccionLocal,
-          imagen_url: imagenUrlLocal,
-          mapa_embed_url: mapaEmbedUrlLocal,
-          menu: menuLocal,
-          instagram: instagramLocal,
-          facebook: facebookLocal,
-          hours: hoursLocal,
-          services: servicesLocal,
-          logo_url: logoUrlLocal,
-          web: webLocal,
-          video_embed_url: videoEmbedUrlLocal,
-          whatsapp: whatsappLocal,
-          pago_id: pagoId,
-          email: payerEmail,
-          monto,
-          plan,
-          status_pago: isFree ? "free" : "approved",
-        };
-
-        const { data: inserted, error: insertErr } = await supabase
-          .from("negocios")
-          .insert([insertPayload])
-          .select("id")
-          .single();
-
-        if (insertErr) throw insertErr;
-
-        const negocioId = inserted?.id;
-        if (!negocioId) throw new Error("No se obtuvo id del negocio.");
-
-        await linkOwnerIfLoggedIn(supabase, negocioId);
-
-        // Limpiar localStorage
-        [
-          "correo_negocio",
-          "nombre_negocio",
-          "descripcion_negocio",
-          "categoria_negocio",
-          "telefono_negocio",
-          "direccion_negocio",
-          "imagen_url",
-          "mapa_embed_url",
-          "menu",
-          "instagram",
-          "facebook",
-          "hours",
-          "services",
-          "logo_url",
-          "web",
-          "video_embed_url",
-          "whatsapp",
-          "monto_negocio",
-        ].forEach((k) => localStorage.removeItem(k));
-
-        setRegMsg(
-          isFree ? "¡Plan FREE activado!" : "¡Negocio registrado con éxito!"
-        );
+      // PRO/PREMIUM => upsert inmediato + redirect con paid=approved
+      try {
+        setRegMsg("Pago confirmado. Activando plan en tu cuenta…");
+        if (!cancelled) {
+          await upsertProfileAndRedirect({
+            plan: planDetected === "premium" ? "premium" : "pro",
+            email: payerEmail,
+            paidFlag: "approved",
+          });
+        }
       } catch (e) {
-        console.error("Error al registrar en Supabase:", e);
-        setRegMsg("No se pudo registrar el negocio.");
+        console.error("Upsert/redirect error:", e);
+        setRegMsg("No se pudo activar el plan automáticamente.");
       }
     }
 
-    register();
+    run();
     return () => {
       cancelled = true;
     };
@@ -462,12 +393,11 @@ export default function PaySuccess() {
     details,
     planParam,
     emailParam,
-    payment_id,
     supabase,
     extEmail,
     extPlan,
     isFree,
-    tagParam,
+    navigate,
   ]);
 
   // Helper: vincula propietario logueado a negocio (idempotente)
@@ -519,7 +449,11 @@ export default function PaySuccess() {
       : "text-gray-600";
 
   const emailToShow =
-    emailParam || extEmail || localStorage.getItem("correo_negocio") || "";
+    emailParam ||
+    extEmail ||
+    localStorage.getItem("reg_email") ||
+    localStorage.getItem("correo_negocio") ||
+    "";
 
   return (
     <div className="max-w-lg mx-auto p-6 bg-white shadow rounded mt-10">

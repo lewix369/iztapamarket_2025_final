@@ -268,11 +268,42 @@ const BusinessForm = ({ initialData, onSubmit, onCancel, categoriesList }) => {
     });
   };
 
+  // Genera un slug único si el base ya existe (agrega -2, -3, ...)
+  async function getUniqueSlug(base) {
+    let candidate = base;
+    // ¿ya existe el slug base?
+    let { data: exists } = await supabase
+      .from("negocios")
+      .select("id")
+      .eq("slug", candidate)
+      .maybeSingle();
+
+    let n = 2;
+    while (exists) {
+      candidate = `${base}-${n}`;
+      const { data: again } = await supabase
+        .from("negocios")
+        .select("id")
+        .eq("slug", candidate)
+        .maybeSingle();
+      if (!again) break;
+      exists = again;
+      n++;
+    }
+    return candidate;
+  }
+
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setError(""); // In case setError is defined in scope
+    setError(null);
 
-    // Validación por plan
+    // --- Requisitos mínimos comunes ---
+    if (!formData.nombre || !formData.telefono || !formData.direccion) {
+      setError("Nombre, teléfono y dirección son obligatorios.");
+      return;
+    }
+
+    // --- Validación por plan ---
     const plan_type = (formData.plan_type || "").trim().toLowerCase();
     const {
       instagram,
@@ -312,34 +343,49 @@ const BusinessForm = ({ initialData, onSubmit, onCancel, categoriesList }) => {
       }
     }
 
+    // --- Normalización de datos antes de guardar (incluye slug) ---
+    const slugify = (str) =>
+      (str || "")
+        .trim()
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "") // elimina acentos
+        .replace(/[^a-z0-9]+/g, "-") // cualquier secuencia no alfanumérica -> guion
+        .replace(/-+/g, "-") // colapsa guiones consecutivos
+        .replace(/(^-|-$)/g, ""); // quita guiones al inicio/fin
+
+    const slug = slugify(formData.nombre);
+
     const normalizedData = {
       ...formData,
       id: initialData?.id || undefined,
-      // Aseguramos que el campo menu esté explícitamente presente
-      menu: formData.menu,
-      plan_type: formData.plan_type.trim().toLowerCase(),
-      categoria: formData.categoria.trim().toLowerCase(),
-      services: formData.services
+      plan_type,
+      categoria: (formData.categoria || "").trim().toLowerCase(),
+      services: (formData.services || "")
         .split(",")
         .map((s) => s.trim())
         .filter((s) => s !== ""),
-      gallery_images: formData.gallery_images
+      gallery_images: (formData.gallery_images || "")
         .split(",")
         .map((img) => img.trim())
         .filter((img) => img !== ""),
+      // mantener menu explícito
+      menu: formData.menu,
+      // asegurar que guardamos el embed correcto aunque el usuario ponga la URL normal
+      video_embed_url:
+        formData.video_embed_url || convertToEmbedUrl(formData.video_url),
+      slug,
     };
 
-    // ✅ Eliminar is_approved si es plan "free" para que el trigger funcione
+    // ✅ Eliminar is_approved si es free para permitir que el trigger actúe
     if (normalizedData.plan_type === "free") {
       delete normalizedData.is_approved;
     }
 
-    console.log("Datos enviados al registro:", normalizedData);
-
-    // Guardar en localStorage para usar después del pago (o prueba)
+    // Persistir en localStorage por si se necesita después
     localStorage.setItem("nuevo_negocio", JSON.stringify(normalizedData));
 
-    // Obtener usuario logueado
+    // --- Usuario actual ---
     const {
       data: { user },
       error: userError,
@@ -354,9 +400,30 @@ const BusinessForm = ({ initialData, onSubmit, onCancel, categoriesList }) => {
       return;
     }
 
-    // Si es creación de nuevo negocio (NO edición) o edición de existente
+    // --- Validar/ajustar slug (solo creación o si cambió el nombre) ---
+    if (!initialData || !initialData.id || slug !== initialData?.slug) {
+      let finalSlug = slug;
+      try {
+        const { data: exists } = await supabase
+          .from("negocios")
+          .select("id")
+          .eq("slug", slug)
+          .maybeSingle();
+
+        if (exists) {
+          // si ya existe, genera siguiente disponible: base-2, base-3, ...
+          finalSlug = await getUniqueSlug(slug);
+        }
+      } catch (e) {
+        console.warn("Verificación de slug falló:", e?.message || e);
+      }
+      // Actualiza el slug normalizado que se usará en el insert/update
+      normalizedData.slug = finalSlug;
+    }
+
+    // --- Crear o actualizar (UNA sola vez; evita duplicados y nulos) ---
     if (!initialData || !initialData.id) {
-      // Crear nuevo negocio
+      // Crear
       const { data: negocioInsertado, error } = await supabase
         .from("negocios")
         .insert([{ ...normalizedData, user_id: user.id, email: user.email }])
@@ -371,7 +438,7 @@ const BusinessForm = ({ initialData, onSubmit, onCancel, categoriesList }) => {
         return;
       }
 
-      // Insertar en negocio_propietarios SOLO si es Pro o Premium
+      // Asociar propietario para Pro/Premium
       if (
         negocioInsertado &&
         negocioInsertado.length > 0 &&
@@ -402,7 +469,7 @@ const BusinessForm = ({ initialData, onSubmit, onCancel, categoriesList }) => {
         }
       }
     } else {
-      // Editar negocio existente
+      // Actualizar
       const { error: updateError } = await supabase
         .from("negocios")
         .update(normalizedData)
@@ -423,82 +490,20 @@ const BusinessForm = ({ initialData, onSubmit, onCancel, categoriesList }) => {
       });
     }
 
-    // Generar slug a partir del nombre
-    const slugify = (str) =>
-      str
-        .toLowerCase()
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "") // elimina acentos
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/(^-|-$)+/g, "");
-
-    const slug = slugify(formData.nombre);
-    // Verificar si ya existe un negocio con este slug
-    const { data: slugExists, error: slugCheckError } = await supabase
-      .from("negocios")
-      .select("id")
-      .eq("slug", slug)
-      .maybeSingle();
-
-    if (slugExists) {
-      toast({
-        title: "Nombre duplicado",
-        description: "Ya existe un negocio con ese nombre. Usa otro nombre.",
-        variant: "destructive",
-      });
-      return;
-    }
-    normalizedData.slug = slug;
-
-    // Insertar el negocio con el user_id y email
-    const { data: negocioInsertado, error } = await supabase
-      .from("negocios")
-      .insert([{ ...normalizedData, user_id: user.id, email: user.email }])
-      .select();
-
-    if (error) {
-      toast({
-        title: "Error",
-        description: "No se pudo registrar el negocio.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    // Insertar en negocio_propietarios SOLO si es Pro o Premium
-    if (
-      negocioInsertado &&
-      negocioInsertado.length > 0 &&
-      ["pro", "premium"].includes(normalizedData.plan_type)
-    ) {
-      const nuevoNegocioId = negocioInsertado[0].id;
-
-      const { error: propietarioError } = await supabase
-        .from("negocio_propietarios")
-        .insert([
-          {
-            user_id: user.id,
-            negocio_id: nuevoNegocioId,
-          },
-        ]);
-
-      if (propietarioError) {
-        toast({
-          title: "Error",
-          description:
-            "El negocio fue creado, pero no se pudo asociar al propietario.",
-          variant: "destructive",
-        });
-        console.error(
-          "Error al asociar propietario:",
-          propietarioError.message
-        );
-      }
-    }
-
-    // Enviar los datos al handler (sirve tanto para creación como edición)
+    // Callback final
     onSubmit(normalizedData);
   };
+
+  // Mantener sincronizada la URL de embed cuando cambie video_url
+  useEffect(() => {
+    if (formData.video_url) {
+      const embed = convertToEmbedUrl(formData.video_url);
+      if (embed !== formData.video_embed_url) {
+        setFormData((prev) => ({ ...prev, video_embed_url: embed }));
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formData.video_url]);
 
   const handleGenerateAIContent = async () => {
     const serviciosProcesados = Array.isArray(formData.services)

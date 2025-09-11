@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import PromoCard from "@/components/PromoCard";
 import { useSession } from "@/contexts/SessionContext";
 import { supabase } from "@/lib/supabaseClient";
@@ -34,7 +35,57 @@ const uuidv4 = () => {
   });
 };
 
+// --- Utilidad local: comprimir a WebP antes de subir (sin dependencias)
+const compressToWebP = async (
+  file,
+  { maxWidth = 1600, maxKB = 300, minQuality = 0.5, step = 0.05 } = {}
+) => {
+  if (!file || !file.type || !file.type.startsWith("image/")) {
+    throw new Error("Archivo de imagen inválido");
+  }
+
+  const img = await new Promise((resolve, reject) => {
+    const i = new Image();
+    i.onload = () => resolve(i);
+    i.onerror = reject;
+    i.src = URL.createObjectURL(file);
+  });
+
+  let width = img.naturalWidth || img.width;
+  let height = img.naturalHeight || img.height;
+  if (width > maxWidth) {
+    const ratio = maxWidth / width;
+    width = Math.round(width * ratio);
+    height = Math.round(height * ratio);
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(img, 0, 0, width, height);
+
+  let quality = 0.9;
+  let blob = await new Promise((res) =>
+    canvas.toBlob(res, "image/webp", quality)
+  );
+  while (blob && blob.size / 1024 > maxKB && quality > minQuality) {
+    quality = Math.max(minQuality, quality - step);
+    blob = await new Promise((res) =>
+      canvas.toBlob(res, "image/webp", quality)
+    );
+  }
+
+  const base = (file.name || "imagen").replace(/\.[^.]+$/, "");
+  const filename = `${base}-${Date.now()}.webp`;
+
+  URL.revokeObjectURL(img.src);
+  return { blob, filename };
+};
+
 const MiNegocioPage = () => {
+  const navigate = useNavigate();
+
   const SUPPORT_URL =
     "https://wa.me/525569006664?text=Hola%20necesito%20reactivar%20mi%20IA";
 
@@ -61,6 +112,15 @@ const MiNegocioPage = () => {
   const session = useSession();
   const user = session?.user;
 
+  // 📌 Query params de la URL (ej. ?plan=premium&email=xxx)
+  const [params] = useSearchParams();
+
+  // 📌 Estado de auth/URL (para evitar crash cuando no hay sesión)
+  const [authChecked, setAuthChecked] = useState(false);
+  const [hasSession, setHasSession] = useState(false);
+  const [sessionEmail, setSessionEmail] = useState(null);
+  const [shouldShowLoginCta, setShouldShowLoginCta] = useState(false);
+
   const [business, setBusiness] = useState({
     id: "",
     nombre: "",
@@ -77,6 +137,7 @@ const MiNegocioPage = () => {
     portada_url: "",
     logo_url: "",
     video_url: "",
+    video_embed_url: "",
     palabras_clave: "",
     menu: "",
     gallery_images: [],
@@ -87,20 +148,22 @@ const MiNegocioPage = () => {
     try {
       const uploadedUrls = [];
       for (const img of selectedImages) {
-        const fileExt = img.file.name.split(".").pop();
-        const fileName = `${Date.now()}-${Math.random()}.${fileExt}`;
+        // Comprimir cada imagen de galería (tamaño moderado)
+        const { blob, filename } = await compressToWebP(img.file, {
+          maxWidth: 1200,
+          maxKB: 300,
+        });
+
+        const path = `gallery/${filename}`;
         const { error: uploadError } = await supabase.storage
           .from("negocios")
-          .upload(`gallery/${fileName}`, img.file);
+          .upload(path, blob, { contentType: "image/webp", upsert: true });
         if (uploadError) throw uploadError;
 
-        const {
-          data: { publicUrl },
-        } = supabase.storage
+        const { data: pub } = supabase.storage
           .from("negocios")
-          .getPublicUrl(`gallery/${fileName}`);
-
-        uploadedUrls.push(publicUrl);
+          .getPublicUrl(path);
+        uploadedUrls.push(pub.publicUrl);
       }
 
       const updatedGallery = [
@@ -332,7 +395,6 @@ const MiNegocioPage = () => {
   const [modoEdicion, setModoEdicion] = useState(false);
   const [editingPromotion, setEditingPromotion] = useState(null);
   const [imagenActual, setImagenActual] = useState(null);
-  const [negocio, setNegocio] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
 
   const removePromoImage = () => {
@@ -439,62 +501,348 @@ const MiNegocioPage = () => {
     }
   };
 
-  // Cargar negocio por user_id
+  // ============================
+  // Cargar negocio (SAFE) + plan
+  // ============================
   useEffect(() => {
-    const fetchData = async () => {
-      const { data, error } = await supabase
-        .from("negocios")
-        .select("*")
-        .eq("user_id", user.id)
-        .single();
+    const run = async () => {
+      try {
+        // 1) Query params del retorno de Mercado Pago
+        const planFromUrl = (params.get("plan") || "").toLowerCase(); // pro | premium
+        const paidSuccess = (params.get("paid") || "").toLowerCase() === "success";
+        const emailFromUrl = params.get("email") || null;
 
-      if (error) {
-        console.error("Error al obtener negocio:", error);
-      } else if (data) {
-        setBusiness({
-          id: data.id,
-          ...data,
-          servicios: Array.isArray(data.servicios)
-            ? data.servicios.join(", ")
-            : data.servicios || "",
-          video_url: data.video_embed_url || data.video_url || "",
-        });
+        // 2) Checar sesión de forma segura (sin lanzar error)
+        const { data: sessionData } = await supabase.auth.getSession();
+        const session = sessionData?.session || null;
+        const userId = session?.user?.id || null;
+        const userEmail = session?.user?.email || null;
+
+        setHasSession(!!session);
+        setSessionEmail(userEmail || null);
+
+        // 3) Si no hay sesión y regresamos de pago → CTA login
+        if (!session) {
+          if (paidSuccess && emailFromUrl) setShouldShowLoginCta(true);
+          setAuthChecked(true);
+          return;
+        }
+
+        // 4) Con sesión: buscar negocio por user_id o email
+        const { data: row, error } = await supabase
+          .from("negocios")
+          .select("*")
+          .or(`user_id.eq.${userId},email.eq.${userEmail}`)
+          .limit(1)
+          .maybeSingle();
+
+        if (error) {
+          console.error("Error al obtener negocio:", error?.message, error);
+          setAuthChecked(true);
+          return;
+        }
+
+        let negocio = row || null;
+
+        // 5) Si no existe, crear uno básico (por si venía de pago)
+        if (!negocio && (emailFromUrl || userEmail)) {
+          const basePayload = {
+            user_id: userId,
+            email: userEmail || emailFromUrl,
+            nombre: "",
+            direccion: "",
+            telefono: "",
+            plan_type: planFromUrl || "free",
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          };
+          const { data: inserted, error: insertErr } = await supabase
+            .from("negocios")
+            .insert(basePayload)
+            .select()
+            .single();
+          if (!insertErr) negocio = inserted;
+        }
+
+        // 6) Aplicar plan si venía en la URL
+        if (negocio && (planFromUrl === "pro" || planFromUrl === "premium")) {
+          if ((negocio.plan_type || "").toLowerCase() !== planFromUrl) {
+            const { data: updated, error: upErr } = await supabase
+              .from("negocios")
+              .update({
+                plan_type: planFromUrl,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", negocio.id)
+              .select()
+              .single();
+            if (!upErr && updated) negocio = updated;
+          }
+        }
+
+        if (negocio) {
+          // Adjunta user_id si falta
+          if (!negocio.user_id && userId) {
+            await supabase.from("negocios").update({ user_id: userId }).eq("id", negocio.id);
+            negocio.user_id = userId;
+          }
+          setBusiness({
+            id: negocio.id,
+            ...negocio,
+            servicios: Array.isArray(negocio.servicios)
+              ? negocio.servicios.join(", ")
+              : negocio.servicios || "",
+            video_url: negocio.video_embed_url || negocio.video_url || "",
+            video_embed_url: negocio.video_embed_url || "",
+          });
+        }
+
+        // 7) Limpia la URL si venías de pago
+        if (paidSuccess) {
+          const clean = new URL(window.location.href);
+          clean.searchParams.delete("paid");
+          clean.searchParams.delete("plan");
+          clean.searchParams.delete("email");
+          window.history.replaceState({}, "", clean.toString());
+        }
+      } catch (e) {
+        console.warn("fetch negocio (safe) error:", e);
+      } finally {
+        setAuthChecked(true);
       }
     };
-    if (user?.id) fetchData();
-  }, [user]);
+    run();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
-    if (negocio) {
-      setBusiness({
-        id: negocio.id || "",
-        nombre: negocio.nombre || "",
-        descripcion: negocio.descripcion || "",
-        servicios: Array.isArray(negocio.servicios)
-          ? negocio.servicios.join(", ")
-          : negocio.servicios || "",
-        telefono: negocio.telefono || "",
-        whatsapp: negocio.whatsapp || "",
-        direccion: negocio.direccion || "",
-        mapa_embed_url: negocio.mapa_embed_url || "",
-        instagram: negocio.instagram || "",
-        facebook: negocio.facebook || "",
-        tiktok: negocio.tiktok || "",
-        web: negocio.web || "",
-        portada_url: negocio.portada_url || "",
-        logo_url: negocio.logo_url || "",
-        video_url: negocio.video_embed_url || negocio.video_url || "",
-        gallery_images: negocio.gallery_images || [],
+    return () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+    };
+  }, [previewUrl]);
+
+  // ------- Promoción activa (última)
+  const [promocion, setPromocion] = useState(null);
+  useEffect(() => {
+    const fetchPromocion = async () => {
+      if (!business?.id) return;
+      const { data, error } = await supabase
+        .from("promociones")
+        .select("*")
+        .eq("negocio_id", business.id)
+        .order("fecha_inicio", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (!error && data) setPromocion(data);
+      else setPromocion(null);
+    };
+    if (business?.id) fetchPromocion();
+  }, [business?.id]);
+
+  // ------- Listas promociones (USAR business.id)
+  const fetchPromociones = async () => {
+    if (!business?.id) return;
+    const { data, error } = await supabase
+      .from("promociones")
+      .select("*")
+      .eq("negocio_id", business.id)
+      .order("fecha_inicio", { ascending: false });
+    if (error) {
+      console.error("Error al cargar promociones:", error.message);
+      return;
+    }
+    setPromociones((data || []).map(mapPromo));
+    if (data && data.length > 0) setPromoActiva(data[0]);
+    else setPromoActiva(null);
+  };
+  useEffect(() => {
+    if (business?.id) fetchPromociones();
+  }, [business?.id]);
+
+  const [promocionesActivas, setPromocionesActivas] = useState([]);
+  const fetchPromocionesActivas = async () => {
+    if (!business?.id) return;
+    const { data, error } = await supabase
+      .from("promociones")
+      .select("*")
+      .eq("negocio_id", business.id);
+    if (!error) setPromocionesActivas((data || []).map(mapPromo));
+  };
+  useEffect(() => {
+    if (business?.id) fetchPromocionesActivas();
+  }, [business?.id]);
+
+  // Guardar promoción (tabla promociones) — con bloqueo y upsert por id
+  const subirImagenPromocion = async (file) => {
+    const { blob, filename } = await compressToWebP(file, {
+      maxWidth: 1200,
+      maxKB: 300,
+    });
+
+    const path = `promociones/${filename}`;
+    const { error: uploadError } = await supabase.storage
+      .from("promociones")
+      .upload(path, blob, { contentType: "image/webp", upsert: true });
+    if (uploadError) throw uploadError;
+
+    const { data: publicURL } = supabase.storage
+      .from("promociones")
+      .getPublicUrl(path);
+    return publicURL.publicUrl;
+  };
+
+  const handleSavePromocion = async () => {
+    if (isSavingPromotion) return;
+    if (!business?.id) {
+      toast({
+        title: "Sin negocio",
+        description: "No se encontró el ID del negocio.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      if (!promo?.titulo || !promo?.fecha_inicio || !promo?.fecha_fin) {
+        toast({
+          title: "Campos incompletos",
+          description: "Faltan título o fechas",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      setIsSavingPromotion(true);
+      setPromoSaveStep(promo.imagen_file ? "Subiendo imagen…" : "Guardando…");
+
+      const promoId = pendingPromoId || uuidv4();
+      if (!pendingPromoId) setPendingPromoId(promoId);
+
+      let imageUrl = promo.imagen_url || null;
+      if (promo.imagen_file) {
+        imageUrl = await subirImagenPromocion(promo.imagen_file);
+      }
+
+      setPromoSaveStep("Guardando…");
+      const { error } = await supabase.from("promociones").upsert(
+        [
+          {
+            id: promoId,
+            negocio_id: business.id,
+            titulo: promo.titulo,
+            descripcion: promo.descripcion,
+            fecha_inicio: promo.fecha_inicio,
+            fecha_fin: promo.fecha_fin,
+            imagen_url: imageUrl,
+          },
+        ],
+        { onConflict: "id" }
+      );
+
+      if (error) throw error;
+
+      toast({ title: "✅ Promoción guardada correctamente" });
+      setPromo({
+        titulo: "",
+        descripcion: "",
+        fecha_inicio: "",
+        fecha_fin: "",
+        imagen_file: null,
+        imagen_url: null,
+      });
+      setPreviewImage(null);
+      setPendingPromoId(null);
+      setPromoSaveStep("");
+
+      fetchPromocionesActivas();
+      fetchPromociones();
+    } catch (error) {
+      console.error("❌ Error:", error.message);
+      toast({
+        title: "Error al guardar promoción",
+        description: error.message,
+        variant: "destructive",
+      });
+    } finally {
+      setIsSavingPromotion(false);
+      setPromoSaveStep("");
+    }
+  };
+
+  // Editar y eliminar promos
+  const handleEditPromo = (p) => {
+    setModoEdicion(true);
+    setEditingPromotion(p.id);
+    setPromo({
+      titulo: p.titulo || p.promocion_titulo || "",
+      descripcion: p.descripcion || p.promocion_descripcion || "",
+      fecha_inicio: p.fecha_inicio || p.promocion_inicio || "",
+      fecha_fin: p.fecha_fin || p.promocion_vigencia || "",
+      imagen_file: null,
+      imagen_url: p.imagen_url || p.promocion_imagen || null,
+    });
+    setPreviewImage(p.imagen_url || p.promocion_imagen || null);
+  };
+
+  const handleDeletePromocion = async (promocionId) => {
+    try {
+      const { error } = await supabase
+        .from("promociones")
+        .delete()
+        .eq("id", promocionId);
+      if (error) throw error;
+      fetchPromocionesActivas();
+      fetchPromociones();
+      toast({ title: "Promoción eliminada correctamente." });
+    } catch (error) {
+      console.error("Error al eliminar promoción:", error.message);
+      toast({
+        title: "Error al eliminar la promoción.",
+        description: error.message,
+        variant: "destructive",
       });
     }
-  }, [negocio]);
+  };
 
-  // Guardar cambios (update directo por user_id)
+  // Eliminar promoción del negocio (campo plano en negocios)
+  const handleDeletePromotion = async () => {
+    try {
+      const { error } = await supabase
+        .from("negocios")
+        .update({
+          promocion_titulo: "",
+          promocion_imagen: "",
+          promocion_vigencia: "",
+          promocion_descripcion: "",
+        })
+        .eq("id", business.id);
+      if (error) throw error;
+
+      setBusiness((prev) => ({
+        ...prev,
+        promocion_titulo: "",
+        promocion_imagen: "",
+        promocion_vigencia: "",
+        promocion_descripcion: "",
+      }));
+      toast({
+        title: "Promoción eliminada",
+        description: "La promoción activa fue borrada correctamente.",
+      });
+    } catch (error) {
+      console.error("Error al eliminar promoción:", error);
+      toast({
+        title: "Error al eliminar promoción",
+        description: error.message,
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Guardar cambios (update directo por user_id) — USAR getSession SAFE
   const handleSubmit = async () => {
-    if (!user) return null;
-    const {
-      data: { user: userObj },
-    } = await supabase.auth.getUser();
+    const { data: s } = await supabase.auth.getSession();
+    const userObj = s?.session?.user || null;
     if (!userObj) {
       alert("Usuario no autenticado.");
       return;
@@ -548,7 +896,7 @@ const MiNegocioPage = () => {
         updated_at: new Date().toISOString(),
         servicios: serviciosArrayForSave,
       })
-      .eq("user_id", user.id)
+      .eq("user_id", userObj.id)
       .select()
       .single();
 
@@ -567,14 +915,18 @@ const MiNegocioPage = () => {
     const file = e.target.files[0];
     if (!file || !user) return;
 
-    const fileExt = file.name.split(".").pop();
-    const fileName = `${Date.now()}.${fileExt}`;
-    const filePath = `${user.id}/${fileName}`;
-    const bucketName = campo === "logo_url" ? "logos" : "portadas";
+    const isLogo = campo === "logo_url";
+    const { blob, filename } = await compressToWebP(file, {
+      maxWidth: isLogo ? 512 : 1600,
+      maxKB: isLogo ? 200 : 400,
+    });
+
+    const filePath = `${user.id}/${filename}`;
+    const bucketName = isLogo ? "logos" : "portadas";
 
     const { error: uploadError } = await supabase.storage
       .from(bucketName)
-      .upload(filePath, file, { upsert: true });
+      .upload(filePath, blob, { contentType: "image/webp", upsert: true });
     if (uploadError) {
       console.error("❌ Error al subir imagen:", uploadError.message);
       return;
@@ -588,7 +940,7 @@ const MiNegocioPage = () => {
     const { error: updateError } = await supabase
       .from("negocios")
       .update({ [campo]: urlFinal })
-      .eq("user_id", user.id);
+      .eq("id", business.id);
 
     if (updateError) {
       console.error(`❌ Error al actualizar ${campo}:`, updateError.message);
@@ -688,7 +1040,6 @@ const MiNegocioPage = () => {
   };
 
   // IA imágenes (Edge function)
-
   const callImageGenerator = async (kind, prompt) => {
     const plan = (business?.plan_type || "").toLowerCase();
     if (!["cover", "logo"].includes(kind)) {
@@ -840,10 +1191,10 @@ const MiNegocioPage = () => {
   // Guardar cambios (upsert con slug)
   const handleSave = async () => {
     try {
-      const { data: userData, error: userError } =
-        await supabase.auth.getUser();
-      if (userError || !userData?.user) {
-        console.error("❌ No se pudo obtener el usuario:", userError);
+      const { data: s } = await supabase.auth.getSession();
+      const userData = s?.session?.user || null;
+      if (!userData) {
+        console.error("❌ No se pudo obtener el usuario");
         alert("No se pudo obtener el usuario.");
         return;
       }
@@ -908,7 +1259,7 @@ const MiNegocioPage = () => {
       const { error } = await supabase
         .from("negocios")
         .upsert({ ...safeBusiness, ...updates, slug: slugGenerado })
-        .eq("user_id", userData.user.id)
+        .eq("user_id", userData.id)
         .select();
 
       if (error) {
@@ -923,12 +1274,10 @@ const MiNegocioPage = () => {
     }
   };
 
-  // Update negocio (payload limpio)
+  // Update negocio (payload limpio) — USAR getSession SAFE
   const handleUpdateBusiness = async () => {
-    if (!user) return null;
-    const {
-      data: { user: userObj },
-    } = await supabase.auth.getUser();
+    const { data: s } = await supabase.auth.getSession();
+    const userObj = s?.session?.user || null;
     if (!userObj) {
       alert("Usuario no autenticado.");
       return;
@@ -984,7 +1333,7 @@ const MiNegocioPage = () => {
       const { error } = await supabase
         .from("negocios")
         .update(updateObj)
-        .eq("user_id", user.id);
+        .eq("id", business.id);
       if (error) {
         console.error("Error al actualizar negocio:", error.message);
         alert("Error al actualizar negocio.");
@@ -993,7 +1342,7 @@ const MiNegocioPage = () => {
       const { data: updatedBusiness, error: fetchError } = await supabase
         .from("negocios")
         .select("*")
-        .eq("user_id", user.id)
+        .eq("id", business.id)
         .single();
       if (fetchError) {
         alert("Negocio actualizado pero no se pudo refrescar el formulario.");
@@ -1002,8 +1351,16 @@ const MiNegocioPage = () => {
       if (updatedBusiness) {
         setBusiness({
           ...updatedBusiness,
+          servicios: Array.isArray(updatedBusiness.servicios)
+            ? updatedBusiness.servicios.join(", ")
+            : updatedBusiness.servicios || "",
           portada_url: updatedBusiness.portada_url || "",
           logo_url: updatedBusiness.logo_url || "",
+          video_url:
+            updatedBusiness.video_embed_url ||
+            updatedBusiness.video_url ||
+            "",
+          video_embed_url: updatedBusiness.video_embed_url || "",
         });
       }
       alert("Negocio actualizado correctamente");
@@ -1103,7 +1460,7 @@ const MiNegocioPage = () => {
     }
   };
   const extractYouTubeId = (url) => {
-    const regex = /(?:youtube\.com.*(?:\?|&)v=|youtu\.be\/)([^&#\s]+)/;
+    const regex = /(?:youtube\.com.*(?:\?|&)v=|youtu\.be\/)([^;&#\s]+)/;
     const match = url.match(regex);
     return match ? match[1] : "";
   };
@@ -1114,230 +1471,6 @@ const MiNegocioPage = () => {
     return id ? `https://www.youtube.com/embed/${id}` : "";
   };
 
-  useEffect(() => {
-    return () => {
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-    };
-  }, [previewUrl]);
-
-  // ------- Promoción activa (última)
-  const [promocion, setPromocion] = useState(null);
-  useEffect(() => {
-    const fetchPromocion = async () => {
-      if (!business?.id) return;
-      const { data, error } = await supabase
-        .from("promociones")
-        .select("*")
-        .eq("negocio_id", business.id)
-        .order("fecha_inicio", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (!error && data) setPromocion(data);
-      else setPromocion(null);
-    };
-    if (business?.id) fetchPromocion();
-  }, [business?.id]);
-
-  // ------- Listas promociones
-  const fetchPromociones = async () => {
-    if (!negocio?.id) return;
-    const { data, error } = await supabase
-      .from("promociones")
-      .select("*")
-      .eq("negocio_id", negocio.id)
-      .order("fecha_inicio", { ascending: false });
-    if (error) {
-      console.error("Error al cargar promociones:", error.message);
-      return;
-    }
-    setPromociones((data || []).map(mapPromo));
-    if (data && data.length > 0) setPromoActiva(data[0]);
-    else setPromoActiva(null);
-  };
-  useEffect(() => {
-    if (negocio?.id) fetchPromociones();
-  }, [negocio]);
-
-  const [promocionesActivas, setPromocionesActivas] = useState([]);
-  const fetchPromocionesActivas = async () => {
-    if (!business?.id) return;
-    const { data, error } = await supabase
-      .from("promociones")
-      .select("*")
-      .eq("negocio_id", business.id);
-    if (!error) setPromocionesActivas((data || []).map(mapPromo));
-  };
-  useEffect(() => {
-    if (business?.id) fetchPromocionesActivas();
-  }, [business?.id]);
-
-  // Guardar promoción (tabla promociones) — con bloqueo y upsert por id
-  const subirImagenPromocion = async (file) => {
-    const fileExt = file.name.split(".").pop();
-    const fileName = `${Date.now()}.${fileExt}`;
-    const filePath = `promociones/${fileName}`;
-
-    const { error: uploadError } = await supabase.storage
-      .from("promociones")
-      .upload(filePath, file);
-    if (uploadError) throw uploadError;
-
-    const { data: publicURL } = supabase.storage
-      .from("promociones")
-      .getPublicUrl(filePath);
-    return publicURL.publicUrl;
-  };
-
-  const handleSavePromocion = async () => {
-    if (isSavingPromotion) return; // evita doble click
-    if (!business?.id) {
-      toast({
-        title: "Sin negocio",
-        description: "No se encontró el ID del negocio.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    try {
-      if (!promo?.titulo || !promo?.fecha_inicio || !promo?.fecha_fin) {
-        toast({
-          title: "Campos incompletos",
-          description: "Faltan título o fechas",
-          variant: "destructive",
-        });
-        return;
-      }
-
-      setIsSavingPromotion(true);
-      setPromoSaveStep(promo.imagen_file ? "Subiendo imagen…" : "Guardando…");
-
-      // Siempre usamos el mismo id mientras dura el guardado ⇒ idempotente
-      const promoId = pendingPromoId || uuidv4();
-      if (!pendingPromoId) setPendingPromoId(promoId);
-
-      let imageUrl = promo.imagen_url || null;
-      if (promo.imagen_file) {
-        imageUrl = await subirImagenPromocion(promo.imagen_file);
-      }
-
-      setPromoSaveStep("Guardando…");
-      // upsert por id: segundo clic no duplica
-      const { error } = await supabase.from("promociones").upsert(
-        [
-          {
-            id: promoId,
-            negocio_id: business.id,
-            titulo: promo.titulo,
-            descripcion: promo.descripcion,
-            fecha_inicio: promo.fecha_inicio,
-            fecha_fin: promo.fecha_fin,
-            imagen_url: imageUrl,
-          },
-        ],
-        { onConflict: "id" }
-      );
-
-      if (error) throw error;
-
-      toast({ title: "✅ Promoción guardada correctamente" });
-      setPromo({
-        titulo: "",
-        descripcion: "",
-        fecha_inicio: "",
-        fecha_fin: "",
-        imagen_file: null,
-        imagen_url: null,
-      });
-      setPreviewImage(null);
-      setPendingPromoId(null);
-      setPromoSaveStep("");
-
-      fetchPromocionesActivas();
-      fetchPromociones();
-    } catch (error) {
-      console.error("❌ Error:", error.message);
-      toast({
-        title: "Error al guardar promoción",
-        description: error.message,
-        variant: "destructive",
-      });
-    } finally {
-      setIsSavingPromotion(false);
-      setPromoSaveStep("");
-    }
-  };
-
-  // Editar y eliminar promos
-  const handleEditPromo = (p) => {
-    setModoEdicion(true);
-    setEditingPromotion(p.id);
-    setPromo({
-      titulo: p.titulo || p.promocion_titulo || "",
-      descripcion: p.descripcion || p.promocion_descripcion || "",
-      fecha_inicio: p.fecha_inicio || p.promocion_inicio || "",
-      fecha_fin: p.fecha_fin || p.promocion_vigencia || "",
-      imagen_file: null,
-      imagen_url: p.imagen_url || p.promocion_imagen || null,
-    });
-    setPreviewImage(p.imagen_url || p.promocion_imagen || null);
-  };
-
-  const handleDeletePromocion = async (promocionId) => {
-    try {
-      const { error } = await supabase
-        .from("promociones")
-        .delete()
-        .eq("id", promocionId);
-      if (error) throw error;
-      fetchPromocionesActivas();
-      fetchPromociones();
-      toast({ title: "Promoción eliminada correctamente." });
-    } catch (error) {
-      console.error("Error al eliminar promoción:", error.message);
-      toast({
-        title: "Error al eliminar la promoción.",
-        description: error.message,
-        variant: "destructive",
-      });
-    }
-  };
-
-  // Eliminar promoción del negocio (campo plano en negocios)
-  const handleDeletePromotion = async () => {
-    try {
-      const { error } = await supabase
-        .from("negocios")
-        .update({
-          promocion_titulo: "",
-          promocion_imagen: "",
-          promocion_vigencia: "",
-          promocion_descripcion: "",
-        })
-        .eq("id", business.id);
-      if (error) throw error;
-
-      setBusiness((prev) => ({
-        ...prev,
-        promocion_titulo: "",
-        promocion_imagen: "",
-        promocion_vigencia: "",
-        promocion_descripcion: "",
-      }));
-      toast({
-        title: "Promoción eliminada",
-        description: "La promoción activa fue borrada correctamente.",
-      });
-    } catch (error) {
-      console.error("Error al eliminar promoción:", error);
-      toast({
-        title: "Error al eliminar promoción",
-        description: error.message,
-        variant: "destructive",
-      });
-    }
-  };
-
   if (!business) return null;
   const plan = (business?.plan_type || "").toLowerCase();
 
@@ -1346,6 +1479,25 @@ const MiNegocioPage = () => {
       <h1 className="text-2xl font-bold mb-4 text-gray-800">
         Mi negocio: {business.nombre}
       </h1>
+
+      {/* Mensaje cuando volvemos de Mercado Pago sin sesión */}
+      {authChecked && shouldShowLoginCta && !hasSession && (
+        <div className="bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded mb-4">
+          <p className="mb-2">
+            Acabas de completar tu pago. Para habilitar tu formulario, inicia
+            sesión con el correo{" "}
+            <strong>{params.get("email")}</strong>.
+          </p>
+          <a
+            href={`/login?redirect=/mi-negocio&email=${encodeURIComponent(
+              params.get("email") || ""
+            )}`}
+            className="inline-flex items-center gap-2 px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700"
+          >
+            Iniciar sesión
+          </a>
+        </div>
+      )}
 
       {/* Mensajes por plan */}
       {plan === "free" && (
@@ -1558,7 +1710,7 @@ const MiNegocioPage = () => {
           </p>
           <Textarea
             placeholder={
-              "Ej.:\\nTacos al pastor — $30\\nAgua de horchata — $25\\nhttps://tu-sitio.com/menu.pdf"
+              "Ej.:\nTacos al pastor — $30\nAgua de horchata — $25\nhttps://tu-sitio.com/menu.pdf"
             }
             value={business.menu || ""}
             onChange={(e) => setBusiness({ ...business, menu: e.target.value })}
@@ -1583,8 +1735,8 @@ const MiNegocioPage = () => {
             {!isLikelyUrl(business.menu) ? (
               <ul className="list-disc list-inside text-sm text-gray-700 bg-gray-50 p-3 rounded">
                 {(business.menu || "")
-                  .split("\\n")
-                  .map((line, idx) => line.trim())
+                  .split("\n")
+                  .map((line) => line.trim())
                   .filter(Boolean)
                   .map((line, idx) => (
                     <li key={idx}>{line}</li>
@@ -1668,7 +1820,7 @@ const MiNegocioPage = () => {
             accept="image/*"
             id="portadaInput"
             style={{ display: "none" }}
-            onChange={(e) => handleUpload(e, "portada_url", "portadas")}
+            onChange={(e) => handleUpload(e, "portada_url")}
           />
           <Button
             className="mt-2 bg-orange-500 text-white hover:bg-orange-600"
@@ -1914,7 +2066,7 @@ const MiNegocioPage = () => {
             accept="image/*"
             id="logoInput"
             style={{ display: "none" }}
-            onChange={(e) => handleUpload(e, "logo_url", "logos")}
+            onChange={(e) => handleUpload(e, "logo_url")}
           />
           <Button
             className="mt-2 bg-orange-500 text-white hover:bg-orange-600"

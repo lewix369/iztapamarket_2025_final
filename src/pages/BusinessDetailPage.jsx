@@ -6,6 +6,30 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import PromoCard from "@/components/PromoCard";
 
+// Optimiza imágenes de Supabase Storage sin romper URLs que no son de Supabase
+const optimizeImage = (
+  url,
+  { width, height, quality = 70, format = "webp" } = {}
+) => {
+  try {
+    if (!url) return url;
+    const u = new URL(url);
+    // Solo aplica a URLs de Supabase Storage públicas
+    const match = u.pathname.match(/\/storage\/v1\/object\/public\/(.+)$/);
+    if (!match) return url;
+    const origin = `${u.protocol}//${u.host}`;
+    const path = match[1]; // bucket/path/filename
+    const params = new URLSearchParams();
+    if (width) params.set("width", String(width));
+    if (height) params.set("height", String(height));
+    params.set("quality", String(quality));
+    params.set("format", format);
+    return `${origin}/storage/v1/render/image/public/${path}?${params.toString()}`;
+  } catch (e) {
+    return url;
+  }
+};
+
 const BusinessDetailPage = () => {
   const { slug } = useParams();
   const [business, setBusiness] = useState(null);
@@ -369,7 +393,10 @@ const BusinessDetailPage = () => {
         <div className="mb-6">
           {business.logo_url && (
             <img
-              src={business.logo_url}
+              src={optimizeImage(business.logo_url, {
+                width: 160,
+                quality: 70,
+              })}
               alt={`Logo de ${business.nombre}`}
               className="h-16 mb-4"
             />
@@ -436,7 +463,7 @@ const BusinessDetailPage = () => {
                   {business.gallery_images.slice(0, 10).map((imgUrl, index) => (
                     <img
                       key={index}
-                      src={imgUrl}
+                      src={optimizeImage(imgUrl, { width: 600, quality: 70 })}
                       alt={`Foto ${index + 1} de ${business.nombre}`}
                       className="w-full h-40 object-cover rounded-lg"
                     />
@@ -742,7 +769,7 @@ const BusinessDetailPage = () => {
                   {business.gallery_images.slice(0, 5).map((imgUrl, index) => (
                     <img
                       key={index}
-                      src={imgUrl}
+                      src={optimizeImage(imgUrl, { width: 600, quality: 70 })}
                       alt={`Foto ${index + 1} de ${business.nombre}`}
                       className="w-full h-40 object-cover rounded-lg"
                     />

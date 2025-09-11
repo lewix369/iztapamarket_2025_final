@@ -12,8 +12,8 @@ dist/
 iztapamarket_directorio_2025_RESTORE/
 .vercel
 # 🔒 secretos
-.env
 .env.local
+.env.production
 # 🧹 artefactos/local
 *.tgz
 *.tgz.sha256

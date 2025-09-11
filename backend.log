@@ -1,0 +1,80 @@
+[dotenv@17.2.0] injecting env (21) from .env.sandbox (tip: ⚙️  enable debug logging with { debug: true })
+🔔 create_preference VERSION=2025-09-08_02
+🔔 webhook_mp VERSION=2025-09-08_01
+🧭 SERVER START MARK v2 @ 2025-09-09T06:10:09.211Z
+🧪 dotenv path: .env.sandbox
+🧪 MP_ENV: sandbox
+🔐 MP_ACCESS_TOKEN (SANDBOX) inicia: APP_USR-71 len: 75
+🟢----------------------------
+🟢 Backend activo en: http://localhost:3000
+🟢----------------------------
+👉 GET /diag/version
+👉 POST /create_preference
+👉 POST /webhook_mp?id=33833413561&topic=merchant_order
+🛎️  [WEBHOOK_MP] >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+🔹 date: 2025-09-09T06:13:51.859Z
+🔹 x-request-id: dafd54c0-c00a-4dd6-93d6-61103ce35842
+🔹 x-signature: ts=1757362317,v1=ca2c7fb173864249d1c7625bda77a7dd5e4984f9847e17155a08c40c3be97a9f
+🔹 topic: merchant_order  data.id: null
+🔹 query: [Object: null prototype] { id: '33833413561', topic: 'merchant_order' }
+🔹 body: {"resource":"https://api.mercadolibre.com/merchant_orders/33833413561","topic":"merchant_order"}
+👉 POST /webhook_mp?data.id=124911634711&type=payment
+🛎️  [WEBHOOK_MP] >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+🔹 date: 2025-09-09T06:13:52.746Z
+🔹 x-request-id: bc9cb770-aa1d-47dc-b12a-b32b2f176a4e
+🔹 x-signature: ts=1757362317,v1=743db126ea1cb58fa5d49f5233f60efb59ebd3b3b23c101ab12dc5ae3bd3ba54
+🔹 topic: payment  data.id: 124911634711
+🔹 query: [Object: null prototype] { 'data.id': '124911634711', type: 'payment' }
+🔹 body: {"action":"payment.created","api_version":"v1","data":{"id":"124911634711"},"date_created":"2025-09-09T06:13:52Z","id":124469149653,"live_mode":true,"type":"payment","user_id":"2658683040"}
+👉 POST /webhook_mp?id=124911634711&topic=payment
+🛎️  [WEBHOOK_MP] >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+🔹 date: 2025-09-09T06:13:52.838Z
+🔹 x-request-id: bc9cb770-aa1d-47dc-b12a-b32b2f176a4e
+🔹 x-signature: ts=1757366153,v1=2cd5eb731fc5d28ac91ff2a911494fdfc9578526bc9c38f014303079db238fd5
+🔹 topic: payment  data.id: null
+🔹 query: [Object: null prototype] { id: '124911634711', topic: 'payment' }
+🔹 body: {"resource":"124911634711","topic":"payment"}
+👉 POST /webhook_mp?id=33833413561&topic=merchant_order
+🛎️  [WEBHOOK_MP] >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+🔹 date: 2025-09-09T06:13:52.935Z
+🔹 x-request-id: e1a874fa-3232-48e3-a631-9668809d84c4
+🔹 x-signature: ts=1757366153,v1=51e1dae86bdb06b99df0b745e05d8058a134070195a2db0504956b827cccb52a
+🔹 topic: merchant_order  data.id: null
+🔹 query: [Object: null prototype] { id: '33833413561', topic: 'merchant_order' }
+🔹 body: {"resource":"https://api.mercadolibre.com/merchant_orders/33833413561","topic":"merchant_order"}
+👉 GET /pago/success?collection_id=124911634711&collection_status=approved&payment_id=124911634711&status=approved&external_reference=testuser4168631680794990658@testuser.com|pro|web&payment_type=credit_card&merchant_order_id=33833413561&preference_id=2658683040-78e8c0b9-3832-4c4f-93f8-8bacc1b6fec8&site_id=MLM&processing_mode=aggregator&merchant_account_id=null
+👉 GET /mp/payment/124911634711
+👉 GET /pago/success?collection_id=124911634711&collection_status=approved&payment_id=124911634711&status=approved&external_reference=testuser4168631680794990658@testuser.com|pro|web&payment_type=credit_card&merchant_order_id=33833413561&preference_id=2658683040-78e8c0b9-3832-4c4f-93f8-8bacc1b6fec8&site_id=MLM&processing_mode=aggregator&merchant_account_id=null
+👉 GET /mp/payment/124911634711
+👉 POST /create_preference
+👉 POST /create_preference
+👉 POST /create_preference
+👉 POST /create_preference
+👉 POST /create_preference
+👉 POST /webhook_mp?data.id=125579678996&type=payment
+🛎️  [WEBHOOK_MP] >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+🔹 date: 2025-09-10T00:52:17.290Z
+🔹 x-request-id: 9727aae2-43fc-4e01-b40d-22dcb0f806aa
+🔹 x-signature: ts=1757461255,v1=c083f03e6488d67aef52fb7e0f1750c6258481b2e3749314490bffe7726d3fe4
+🔹 topic: payment  data.id: 125579678996
+🔹 query: [Object: null prototype] { 'data.id': '125579678996', type: 'payment' }
+🔹 body: {"action":"payment.created","api_version":"v1","data":{"id":"125579678996"},"date_created":"2025-09-10T00:52:16Z","id":124492984797,"live_mode":true,"type":"payment","user_id":"2658683040"}
+👉 POST /webhook_mp?id=125579678996&topic=payment
+🛎️  [WEBHOOK_MP] >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+🔹 date: 2025-09-10T00:52:17.317Z
+🔹 x-request-id: 9727aae2-43fc-4e01-b40d-22dcb0f806aa
+🔹 x-signature: ts=1757448408,v1=407f93d932e1ae3a05ea6b69eca5ce76d2bfc3405487eda8cdb2c38748505626
+🔹 topic: payment  data.id: null
+🔹 query: [Object: null prototype] { id: '125579678996', topic: 'payment' }
+🔹 body: {"resource":"125579678996","topic":"payment"}
+👉 GET /pago/success?collection_id=125579678996&collection_status=approved&payment_id=125579678996&status=approved&external_reference=testuser4168631680794990658@testuser.com|premium|web&payment_type=credit_card&merchant_order_id=33880444130&preference_id=2658683040-47010ec2-f086-496e-96ff-7a980cb8bc06&site_id=MLM&processing_mode=aggregator&merchant_account_id=null
+👉 GET /mp/payment/125579678996
+👉 POST /webhook_mp?id=33880444130&topic=merchant_order
+🛎️  [WEBHOOK_MP] >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+🔹 date: 2025-09-10T00:52:58.354Z
+🔹 x-request-id: c85e9952-fe64-43dc-b580-c3876f469498
+🔹 x-signature: ts=1756870559,v1=376d33243a39b9140503b015342f9a238de309af691d5cf2c9c4a07a2b9e3a77
+🔹 topic: merchant_order  data.id: null
+🔹 query: [Object: null prototype] { id: '33880444130', topic: 'merchant_order' }
+🔹 body: {"resource":"https://api.mercadolibre.com/merchant_orders/33880444130","topic":"merchant_order"}
+👉 GET /api/sitemap

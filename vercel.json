@@ -1,26 +1,50 @@
 {
   "version": 2,
-  "buildCommand": "vite build",
+  "buildCommand": "npm run build",
   "outputDirectory": "dist",
-  "routes": [
-    { "handle": "filesystem" },
-    { "src": "/(google[0-9a-f]+\\.html)", "dest": "/$1" },
-    { "src": "/(sitemap\\.xml|robots\\.txt)", "dest": "/$1" },
-    { "src": "/.*", "dest": "/index.html" }
+  "rewrites": [
+    {
+      "source": "/google3a072cd80aefa66d.html",
+      "destination": "/google3a072cd80aefa66d.html"
+    },
+    { "source": "/robots.txt", "destination": "/robots.txt" },
+    { "source": "/sitemap.xml", "destination": "/sitemap.xml" },
+    { "source": "/api/sitemap", "destination": "/api/sitemap" },
+    {
+      "source": "/manifest.webmanifest",
+      "destination": "/manifest.webmanifest"
+    },
+    { "source": "/service-worker.js", "destination": "/service-worker.js" },
+    { "source": "/(.*)", "destination": "/index.html" }
   ],
   "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [{ "key": "x-vercel-skip-feedback-widget", "value": "1" }]
+    },
+    {
+      "source": "/google3a072cd80aefa66d.html",
+      "headers": [
+        { "key": "x-vercel-skip-feedback-widget", "value": "1" },
+        { "key": "Cache-Control", "value": "no-cache" }
+      ]
+    },
     {
       "source": "/index.html",
       "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
     },
     {
-      "source": "/:all*(js|css|png|jpg|jpeg|gif|svg|ico|webp|woff2|ttf|json)",
+      "source": "/:path*\\.(js|css|png|jpg|jpeg|gif|svg|ico|webp|woff2|ttf|json)",
       "headers": [
         {
           "key": "Cache-Control",
           "value": "public, max-age=31536000, immutable"
         }
       ]
+    },
+    {
+      "source": "/service-worker.js",
+      "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
     }
   ]
 }

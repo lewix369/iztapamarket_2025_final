@@ -1,6 +1,6 @@
 // sube versión para invalidar SW viejo
-const CACHE_NAME = "iztapamarket-cache-v2";
-const PRECACHE_URLS = ["/", "/index.html", "/manifest.json"];
+const CACHE_NAME = "iztapamarket-cache-v3";
+const PRECACHE_URLS = ["/", "/index.html", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
