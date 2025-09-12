@@ -21,3 +21,4 @@ iztapamarket_directorio_2025_RESTORE/
 supabase/.temp/
 supabase/.branches/
 iztapamarket_directorio_2025.git/
+supabase/functions/**/.env

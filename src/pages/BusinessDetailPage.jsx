@@ -30,6 +30,37 @@ const optimizeImage = (
   }
 };
 
+// Convierte un path de Supabase Storage a URL pública; autodetecta el bucket si el path lo incluye
+const resolvePublicUrl = (pathOrUrl) => {
+  if (!pathOrUrl) return null;
+  // Si ya es URL completa, devuélvela tal cual
+  if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
+  try {
+    const clean = String(pathOrUrl).replace(/^\/+/, "");
+    const [maybeBucket, ...rest] = clean.split("/");
+    const hasBucket = rest.length > 0;
+    const filePath = hasBucket ? rest.join("/") : clean;
+    // Buckets candidatos: si el path ya trae bucket, pruébalo primero
+    const bucketsToTry = hasBucket
+      ? [maybeBucket]
+      : [
+          "negocios",
+          "logos",
+          "portadas",
+          "promociones",
+          "gallery",
+          "business_assets",
+        ];
+    for (const bucket of bucketsToTry) {
+      const { data } = supabase.storage.from(bucket).getPublicUrl(filePath);
+      if (data?.publicUrl) return data.publicUrl;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+};
+
 const BusinessDetailPage = () => {
   const { slug } = useParams();
   const [business, setBusiness] = useState(null);
@@ -40,6 +71,7 @@ const BusinessDetailPage = () => {
       "⚠️ Plan no definido aún. Ocultando contenido condicional temporalmente."
     );
   }
+  const [showPromo, setShowPromo] = useState(false);
   const [promociones, setPromociones] = useState([]);
 
   useEffect(() => {
@@ -110,6 +142,10 @@ const BusinessDetailPage = () => {
 
     fetchPromociones();
   }, [business?.id]);
+
+  useEffect(() => {
+    setShowPromo(Boolean(business?.promocion_imagen));
+  }, [business?.promocion_imagen]);
 
   const promocionesArray = Array.isArray(promociones)
     ? promociones
@@ -329,6 +365,9 @@ const BusinessDetailPage = () => {
   const shouldShowMenu = plan === "premium" && isFoodCategory && hasMenu;
   // ---------------------------------------------------------------
 
+  // URL segura para el logo (soporta path de Storage o URL completa)
+  const logoSrc = resolvePublicUrl(business?.logo_url);
+
   return (
     <>
       <Helmet>
@@ -391,14 +430,13 @@ const BusinessDetailPage = () => {
 
       <div className="container mx-auto px-4 py-10">
         <div className="mb-6">
-          {business.logo_url && (
+          {logoSrc && (
             <img
-              src={optimizeImage(business.logo_url, {
-                width: 160,
-                quality: 70,
-              })}
+              src={logoSrc}
               alt={`Logo de ${business.nombre}`}
-              className="h-16 mb-4"
+              className="h-24 md:h-28 lg:h-32 w-auto mb-4"
+              loading="lazy"
+              onError={(e) => (e.currentTarget.style.display = "none")}
             />
           )}
           <h1 className="text-4xl font-bold mb-2">{business.nombre}</h1>
@@ -421,16 +459,18 @@ const BusinessDetailPage = () => {
         </div>
 
         {/* Promoción destacada */}
-        {business.promocion_imagen && (
+        {showPromo && (
           <div className="w-full max-w-md mx-auto my-6">
             <img
               src={business.promocion_imagen}
-              alt="Promoción"
+              alt=""
               className="w-full h-auto rounded-xl shadow-lg"
+              onError={() => setShowPromo(false)}
+              loading="lazy"
             />
           </div>
         )}
-        {business.promocion_vigencia && (
+        {showPromo && business.promocion_vigencia && (
           <p className="text-center text-muted-foreground text-sm mb-4">
             Vigencia: {business.promocion_vigencia}
           </p>
@@ -447,10 +487,10 @@ const BusinessDetailPage = () => {
         )}
 
         {/* Estadísticas */}
-        {business?.visitas && (
+        {Number(business?.visitas) > 0 && (
           <p className="text-sm text-gray-600">👁️ {business.visitas} visitas</p>
         )}
-        {business?.clicks && (
+        {Number(business?.clicks) > 0 && (
           <p className="text-sm text-gray-600">👆 {business.clicks} clics</p>
         )}
 

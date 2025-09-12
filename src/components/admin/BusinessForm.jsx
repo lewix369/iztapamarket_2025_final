@@ -6,7 +6,6 @@ const convertToEmbedUrl = (url) => {
   const match = url.match(youtubeRegex);
   return match ? `https://www.youtube.com/embed/${match[1]}` : url;
 };
-import { generarDescripcion } from "@/services/generateDescription"; // 🔥 Importa la función
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -21,6 +20,39 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/components/ui/use-toast";
 import { supabase } from "@/lib/supabaseClient";
+
+// --- IA helper: invoca la Edge Function generate-description con anon key ---
+const FUNCTIONS_URL =
+  import.meta.env.VITE_FUNCTIONS_URL || "http://127.0.0.1:54321/functions/v1";
+const ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+async function generarDescripcionAI({
+  nombre,
+  categoria,
+  servicios,
+  ciudad,
+  tono,
+}) {
+  const resp = await fetch(`${FUNCTIONS_URL}/generate-description`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      apikey: ANON_KEY,
+      Authorization: `Bearer ${ANON_KEY}`,
+    },
+    body: JSON.stringify({
+      nombre,
+      categoria,
+      servicios: servicios || "",
+      ciudad: ciudad || "Iztapalapa, CDMX",
+      tono: tono || "profesional y cercano",
+    }),
+  });
+  if (!resp.ok) throw new Error(`AI ${resp.status}: ${await resp.text()}`);
+  const { descripcion } = await resp.json();
+  return descripcion || "";
+}
+// ---------------------------------------------------------------------------
 
 // --- LabeledInput Helper Component ---
 const LabeledInput = ({ label, name, value, onChange, placeholder }) => (
@@ -523,11 +555,11 @@ const BusinessForm = ({ initialData, onSubmit, onCancel, categoriesList }) => {
       return;
     }
 
-    if (!formData.nombre || !formData.categoria || !serviciosProcesados) {
+    if (!formData.nombre || !formData.categoria) {
       toast({
         title: "Información requerida",
         description:
-          "Ingresa nombre, categoría y servicios para generar la descripción.",
+          "Ingresa al menos nombre y categoría para generar la descripción.",
         variant: "destructive",
       });
       return;
@@ -539,10 +571,12 @@ const BusinessForm = ({ initialData, onSubmit, onCancel, categoriesList }) => {
     });
     setIsGeneratingAIContent(true);
     try {
-      const descripcion = await generarDescripcion({
+      const descripcion = await generarDescripcionAI({
         nombre: formData.nombre,
         categoria: formData.categoria,
         servicios: serviciosProcesados,
+        ciudad: formData?.ciudad || undefined,
+        tono: "profesional y cercano",
       });
       if (!descripcion || typeof descripcion !== "string") {
         throw new Error("La descripción generada es inválida.");
