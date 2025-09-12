@@ -62,24 +62,62 @@ serve(async (req) => {
       return texto;
     }
 
+    // Helper para metaTitle y metaDescription
+    function buildMeta(
+      description: string,
+      nombre: string,
+      categoria: string,
+      ciudad: string
+    ) {
+      const metaTitle = `${nombre} | ${categoria} en ${ciudad}`;
+      const metaDescription =
+        description.length > 155
+          ? description.slice(0, 152).trim() + "..."
+          : description;
+      return { metaTitle, metaDescription };
+    }
+
     if (!OPENAI_API_KEY) {
       console.warn("⚠️ OPENAI_API_KEY no configurada, usando fallback.");
       const descripcion = await fallbackDescripcion();
-      return new Response(JSON.stringify({ descripcion }), {
-        status: 200,
-        headers: {
-          "Content-Type": "application/json",
-          ...corsHeaders,
-        },
-      });
+      const { metaTitle, metaDescription } = buildMeta(
+        descripcion,
+        nombre,
+        categoria,
+        ciudadSafe
+      );
+      return new Response(
+        JSON.stringify({ descripcion, metaTitle, metaDescription }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            ...corsHeaders,
+          },
+        }
+      );
     }
 
-    // Build prompt
+    // Build prompt (SEO-aware, cercano y claro)
+    const keywordsBase = [nombre, categoria, ciudadSafe]
+      .filter(Boolean)
+      .join(", ");
+    const keywordsExtra = String(serviciosSafe || "");
     const prompt = `
-Genera una descripción breve (80-120 palabras) para un negocio llamado "${nombre}".
-Categoría: ${categoria}. Ciudad: ${ciudadSafe}. Tono: ${tonoSafe}.
-Servicios/énfasis: ${serviciosSafe}.
-Enfatiza beneficios y propuesta de valor. No uses emojis ni precios. Devuelve solo el párrafo final.
+Escribe una descripción breve y clara (70–100 palabras) para el negocio "${nombre}" en ${ciudadSafe}, de la categoría ${categoria}.
+Objetivo: que cualquier persona lo entienda rápido y que posicione mejor en buscadores (SEO) sin sonar forzado.
+
+Instrucciones de estilo:
+- Tono: cercano, confiable y profesional (como si hablaras con un vecino).
+- Lenguaje sencillo, sin tecnicismos ni listas. Un solo párrafo.
+- Destaca beneficios reales y diferenciadores.
+- Integra de forma NATURAL estas palabras clave: ${keywordsBase}${
+      keywordsExtra ? `, ${keywordsExtra}` : ""
+    }.
+- Cierra con una llamada a la acción breve (ej: "Contáctanos hoy" o "Visítanos y conócenos").
+- Prohibido: emojis, precios, MAYÚSCULAS SOSTENIDAS, enumeraciones.
+
+Devuelve solo el párrafo final (sin títulos).
     `.trim();
 
     try {
@@ -107,8 +145,19 @@ Enfatiza beneficios y propuesta de valor. No uses emojis ni precios. Devuelve so
         const errText = await aiResp.text();
         console.error("❌ OpenAI error:", errText);
         const descripcion = await fallbackDescripcion();
+        const { metaTitle, metaDescription } = buildMeta(
+          descripcion,
+          nombre,
+          categoria,
+          ciudadSafe
+        );
         return new Response(
-          JSON.stringify({ descripcion, warning: "openai_fallback" }),
+          JSON.stringify({
+            descripcion,
+            metaTitle,
+            metaDescription,
+            warning: "openai_fallback",
+          }),
           {
             status: 200,
             headers: {
@@ -125,19 +174,38 @@ Enfatiza beneficios y propuesta de valor. No uses emojis ni precios. Devuelve so
         (await fallbackDescripcion());
 
       console.log("🧠 Descripción generada:", descripcion);
-
-      return new Response(JSON.stringify({ descripcion }), {
-        status: 200,
-        headers: {
-          "Content-Type": "application/json",
-          ...corsHeaders,
-        },
-      });
+      const { metaTitle, metaDescription } = buildMeta(
+        descripcion,
+        nombre,
+        categoria,
+        ciudadSafe
+      );
+      return new Response(
+        JSON.stringify({ descripcion, metaTitle, metaDescription }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            ...corsHeaders,
+          },
+        }
+      );
     } catch (e) {
       console.error("❌ Error llamando a OpenAI:", e);
       const descripcion = await fallbackDescripcion();
+      const { metaTitle, metaDescription } = buildMeta(
+        descripcion,
+        nombre,
+        categoria,
+        ciudadSafe
+      );
       return new Response(
-        JSON.stringify({ descripcion, warning: "openai_error_fallback" }),
+        JSON.stringify({
+          descripcion,
+          metaTitle,
+          metaDescription,
+          warning: "openai_error_fallback",
+        }),
         {
           status: 200,
           headers: {

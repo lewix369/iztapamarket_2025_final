@@ -8,7 +8,6 @@
       "destination": "/google3a072cd80aefa66d.html"
     },
     { "source": "/robots.txt", "destination": "/robots.txt" },
-    { "source": "/sitemap.xml", "destination": "/sitemap.xml" },
     { "source": "/api/sitemap", "destination": "/api/sitemap" },
     {
       "source": "/manifest.webmanifest",
@@ -16,6 +15,13 @@
     },
     { "source": "/service-worker.js", "destination": "/service-worker.js" },
     { "source": "/(.*)", "destination": "/index.html" }
+  ],
+  "redirects": [
+    {
+      "source": "/sitemap.xml",
+      "destination": "/api/sitemap",
+      "permanent": true
+    }
   ],
   "headers": [
     {
@@ -45,6 +51,13 @@
     {
       "source": "/service-worker.js",
       "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+    },
+    {
+      "source": "/api/sitemap",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache" },
+        { "key": "x-vercel-skip-feedback-widget", "value": "1" }
+      ]
     }
   ]
 }

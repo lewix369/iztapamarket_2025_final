@@ -371,19 +371,38 @@ const BusinessDetailPage = () => {
   return (
     <>
       <Helmet>
-        <title>{business.nombre} | IztapaMarket</title>
+        <title>
+          {business.metaTitle || `${business.nombre} | IztapaMarket`}
+        </title>
         <meta
           name="description"
-          content={business.descripcion?.slice(0, 150)}
+          content={
+            business.metaDescription ||
+            business.descripcion?.slice(0, 150) ||
+            ""
+          }
         />
-        <meta property="og:title" content={business.nombre} />
+        <meta
+          property="og:title"
+          content={business.metaTitle || business.nombre}
+        />
         <meta
           property="og:description"
-          content={business.descripcion?.slice(0, 150)}
+          content={
+            business.metaDescription ||
+            business.descripcion?.slice(0, 150) ||
+            ""
+          }
         />
         <meta
           property="og:image"
-          content={business.logo_url || business.imagen_url}
+          content={optimizeImage(
+            resolvePublicUrl(business.logo_url) || business.imagen_url,
+            {
+              width: 1200,
+              quality: 70,
+            }
+          )}
         />
         <meta property="og:type" content="business.business" />
         <meta
@@ -393,14 +412,27 @@ const BusinessDetailPage = () => {
         <meta name="robots" content="index, follow" />
         <meta name="author" content="IztapaMarket" />
         <meta name="twitter:card" content="summary_large_image" />
-        <meta name="twitter:title" content={business.nombre} />
+        <meta
+          name="twitter:title"
+          content={business.metaTitle || business.nombre}
+        />
         <meta
           name="twitter:description"
-          content={business.descripcion?.slice(0, 150)}
+          content={
+            business.metaDescription ||
+            business.descripcion?.slice(0, 150) ||
+            ""
+          }
         />
         <meta
           name="twitter:image"
-          content={business.logo_url || business.imagen_url}
+          content={optimizeImage(
+            resolvePublicUrl(business.logo_url) || business.imagen_url,
+            {
+              width: 1200,
+              quality: 70,
+            }
+          )}
         />
         <script type="application/ld+json">
           {JSON.stringify({
@@ -857,27 +889,23 @@ const BusinessDetailPage = () => {
         )}
 
         {/* Promociones activas (sección única) */}
-        <section className="mt-10">
-          <h2 className="text-xl font-bold mt-10 mb-2 text-red-600">
-            🎉 Promociones activas
-          </h2>
-          <div className="flex flex-wrap gap-4">
-            {promocionesArray.length === 0 ? (
-              <p className="text-gray-500 w-full">
-                No hay promociones activas registradas.
-              </p>
-            ) : (
-              promocionesArray.map((promo) => (
+        {promocionesArray.length > 0 && (
+          <section className="mt-10">
+            <h2 className="text-xl font-bold mt-10 mb-2 text-red-600">
+              🎉 Promociones activas
+            </h2>
+            <div className="flex flex-wrap gap-4">
+              {promocionesArray.map((promo) => (
                 <div
                   key={promo.id}
                   className="w-full sm:w-1/2 md:w-1/3 lg:w-1/4"
                 >
                   <PromoCard promo={promo} contexto="detalle" />
                 </div>
-              ))
-            )}
-          </div>
-        </section>
+              ))}
+            </div>
+          </section>
+        )}
 
         {/* -------- NUEVO: Menú (al final) -------- */}
         {shouldShowMenu && renderMenuBlock()}
