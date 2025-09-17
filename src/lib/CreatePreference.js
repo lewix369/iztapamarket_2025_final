@@ -1,3 +1,7 @@
+// src/lib/CreatePreference.js
+// Devuelve SIEMPRE un string URL (init_point) listo para redirigir.
+// Acepta (plan, email). Soporta respuestas JSON { init_point } y también string.
+
 export const createPreference = async (plan, email) => {
   try {
     if (
@@ -12,45 +16,73 @@ export const createPreference = async (plan, email) => {
       });
       return null;
     }
-    console.log("🧪 Debug - Valor recibido de plan:", plan, typeof plan);
-    console.log("🧪 Debug - Valor recibido de email:", email, typeof email);
+
+    // Normaliza el plan a "pro" | "premium"
+    const cleanPlanRaw = plan.toLowerCase().trim();
+    const cleanPlan =
+      cleanPlanRaw === "premium"
+        ? "premium"
+        : cleanPlanRaw === "pro" || cleanPlanRaw === "profesional"
+        ? "pro"
+        : cleanPlanRaw; // deja pasar "free" si algún día se usa, pero en pagos será "pro"/"premium"
+
     const payload = {
-      plan: plan.toLowerCase(),
+      plan: cleanPlan,
       email: email.trim(),
     };
 
-    console.log("📤 Enviando preferencia al backend:", payload);
+    // Endpoints según entorno
+    const ENDPOINT =
+      (typeof import.meta !== "undefined" &&
+        import.meta?.env?.VITE_CREATE_PREFERENCE_URL) ||
+      (typeof process !== "undefined" &&
+        process?.env?.VITE_CREATE_PREFERENCE_URL) ||
+      (typeof window !== "undefined" &&
+      window?.location?.hostname === "localhost"
+        ? "http://localhost:3000/create_preference"
+        : "/api/createPreference");
 
-    const response = await fetch("http://localhost:3000/create_preference", {
+    const resp = await fetch(ENDPOINT, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
 
-    if (!response.ok) {
-      const errorDetails = await response.text();
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
       throw new Error(
-        `Error del servidor: ${response.status} - ${errorDetails}`
+        `Servidor ${resp.status}: ${text || "Error al crear preferencia"}`
       );
     }
 
-    const data = await response.json();
-    console.log("📦 Data cruda de respuesta JSON:", data);
-    console.log("✅ Respuesta del backend:", data);
+    const data = await resp.json().catch(() => ({}));
 
-    if (!data.init_point) {
-      throw new Error(
-        "❌ init_point no está definido en la respuesta del backend."
-      );
+    // Prioriza init_point (producción). Si no, sandbox_init_point. Si el backend devuelve string, úsalo.
+    let url =
+      typeof data === "string"
+        ? data
+        : data?.init_point || data?.sandbox_init_point || "";
+
+    if (!url || !/^https?:\/\//i.test(url)) {
+      throw new Error("Respuesta sin init_point válido.");
     }
 
-    return `${data.init_point}?email=${encodeURIComponent(
-      email
-    )}&plan=${encodeURIComponent(plan)}`;
-  } catch (error) {
-    console.error("❌ Error al crear preferencia:", error.message || error);
+    // ⚠️ Opcional: Propagar email/plan en la URL de MP (solo para debugging/consistencia visual).
+    // Esto NO afecta los back_urls (los define el backend).
+    try {
+      const u = new URL(url);
+      if (!u.searchParams.get("email"))
+        u.searchParams.set("email", email.trim());
+      if (!u.searchParams.get("plan")) u.searchParams.set("plan", cleanPlan);
+      url = u.toString();
+    } catch {
+      // Si falla URL(), no pasa nada — usamos la URL tal cual vino
+    }
+
+    console.log("🟢 URL de pago generada:", url);
+    return url;
+  } catch (err) {
+    console.error("❌ Error en createPreference:", err);
     return null;
   }
 };

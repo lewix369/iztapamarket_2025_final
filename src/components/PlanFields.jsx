@@ -38,9 +38,13 @@ const LabeledTextarea = ({ label, name, value, onChange, placeholder }) => (
   </div>
 );
 
-const PlanFields = ({ plan, formData, handleChange }) => {
-  if (plan !== "pro" && plan !== "premium") return null;
-
+/**
+ * Ahora muestra SIEMPRE los campos base (sirve para FREE también).
+ * Si luego quieres campos extra para pro/premium, usa plan === 'pro' || 'premium'
+ * dentro del JSX para agregarlos condicionalmente.
+ */
+const PlanFields = ({ plan = "free", formData, handleChange }) => {
+  // Campos comunes a todos los planes (incluido FREE)
   return (
     <>
       <LabeledInput
@@ -83,6 +87,20 @@ const PlanFields = ({ plan, formData, handleChange }) => {
         placeholder="ejemplo@correo.com"
         type="email"
       />
+
+      {/* Ejemplo de campos SOLO para planes de pago, por si luego los quieres:
+      {(plan === "pro" || plan === "premium") && (
+        <>
+          <LabeledInput
+            label="Horario detallado"
+            name="horario"
+            value={formData.horario || ""}
+            onChange={handleChange}
+            placeholder="Lun-Dom 9:00–18:00"
+          />
+        </>
+      )}
+      */}
     </>
   );
 };

@@ -12,8 +12,8 @@ dist/
 iztapamarket_directorio_2025_RESTORE/
 .vercel
 # 🔒 secretos
-.env
 .env.local
+.env.production
 # 🧹 artefactos/local
 *.tgz
 *.tgz.sha256
@@ -21,3 +21,16 @@ iztapamarket_directorio_2025_RESTORE/
 supabase/.temp/
 supabase/.branches/
 iztapamarket_directorio_2025.git/
+supabase/functions/**/.env
+.env
+.env.*
+!.env.example
+
+# logs
+*.log
+logs/
+backend.log
+
+# envs
+.env
+.env.*

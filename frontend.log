@@ -1,0 +1,23 @@
+
+> iztapamarket@1.0.0 dev:frontend
+> vite --port 5173 --strictPort
+
+
+  VITE v4.5.14  ready in 187 ms
+
+  ➜  Local:   http://localhost:5173/
+  ➜  Network: http://192.168.1.97:5173/
+3:30:24 PM [vite] hmr update /src/components/admin/BusinessForm.jsx, /src/index.css
+3:45:51 PM [vite] hmr update /src/components/admin/BusinessForm.jsx, /src/index.css
+3:48:07 PM [vite] hmr update /src/components/admin/BusinessForm.jsx, /src/index.css
+3:55:57 PM [vite] hmr update /src/components/admin/BusinessForm.jsx, /src/index.css
+9:14:09 PM [vite] changed tsconfig file detected: /Users/luiscarrillo/Proyectos/iztapamarket_directorio_2025_RESTORE/.vercel/cache/node/api/sitemap.ts/tsconfig.json - Clearing cache and forcing full-reload to ensure TypeScript is compiled with updated config values.
+9:14:09 PM [vite] changed tsconfig file detected: /Users/luiscarrillo/Proyectos/iztapamarket_directorio_2025_RESTORE/.vercel/cache/node/api/sitemap.ts/tsconfig.json - Clearing cache and forcing full-reload to ensure TypeScript is compiled with updated 9:19:34 PM [vite] .env.local changed, restarting server...
+9:19:34 PM [vite] server restarted.
+
+  ➜  Local:   http://localhost:5175/
+  ➜  Network: http://192.168.1.71:5175/
+9:24:15 PM [vit9:24:15 PM [vite] .env.local changed, restar9:24:15 PM [vite] server restarted.
+9:29:32 PM [vit9:29:32 PM [vite] .env changed, restar9:29:32 PM [vit9:29:32 PM [vite] .env changed, restar9:29:32 PM [vit9:29:32 PM [vite] ser9:29:41 PM [vite] .env changed, restarting server...
+9:29:41 PM [vite] server restarted.
+ver restarted.

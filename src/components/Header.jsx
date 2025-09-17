@@ -41,9 +41,7 @@ const Header = () => {
         setDeferredPrompt(null);
       });
     } else {
-      // Sin prompt disponible (o iOS): lleva a la guía de instalación
       navigate("/descargar");
-      // Además muestra un toast amable (no bloqueante)
       toast({
         title: "ℹ️ Cómo instalar IztapaMarket",
         description: isIOS
@@ -135,14 +133,16 @@ const Header = () => {
               </Link>
             )}
 
-            <Link to="/registro/free">
-              <Button
-                size="sm"
-                className="bg-orange-500 hover:bg-orange-600 text-white"
-              >
+            {/* ✅ Fix: usar asChild para que el Link sea el elemento clickeable */}
+            <Button
+              asChild
+              size="sm"
+              className="bg-orange-500 hover:bg-orange-600 text-white"
+            >
+              <Link to="/registro/free" aria-label="Registrar Negocio">
                 Registrar Negocio
-              </Button>
-            </Link>
+              </Link>
+            </Button>
 
             <Button
               size="sm"

@@ -1,41 +1,95 @@
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="generator" content="IztapaMarket" />
-  <meta name="theme-color" content="#003366" />
-  <meta
-    name="description"
-    content="IztapaMarket - Directorio local de negocios en Iztapalapa, CDMX. Encuentra comercios, servicios y emprendedores de tu comunidad."
-  />
-  <meta
-    name="keywords"
-    content="Iztapalapa, negocios locales, directorio, comercios, servicios, CDMX, app, aplicación, emprendimientos, marketing local"
-  />
-  <meta
-    property="og:title"
-    content="IztapaMarket - Directorio Local de Iztapalapa"
-  />
-  <meta
-    property="og:description"
-    content="Descubre los mejores negocios locales en Iztapalapa"
-  />
-  <meta property="og:type" content="website" />
-  <meta property="og:url" content="https://iztapamarket.com/" />
-  <meta
-    property="og:image"
-    content="https://iztapamarket.com/images/og-banner.png"
-  />
+<!DOCTYPE html>
+<html lang="es-MX">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-  <!-- Favicon & App Icons -->
-  <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon" />
-  <link rel="icon" type="image/png" href="/favicon.ico" />
-  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-  <link rel="manifest" href="/manifest.json" />
+    <!-- App info -->
+    <meta name="application-name" content="IztapaMarket" />
+    <meta name="generator" content="IztapaMarket" />
+    <meta name="theme-color" content="#003366" />
+    <meta
+      name="description"
+      content="IztapaMarket: el directorio local de Iztapalapa, CDMX. Encuentra restaurantes, tiendas, servicios y negocios cerca de ti con información confiable."
+    />
+    <meta
+      name="keywords"
+      content="Iztapalapa, directorio local, negocios, restaurantes, tiendas, servicios, CDMX, emprendedores, comercio local"
+    />
+    <meta name="author" content="IztapaMarket" />
 
-  <title>IztapaMarket - Directorio Local de Iztapalapa</title>
-</head>
-<body>
-  <!-- Contenido de la página aquí -->
-  <div id="root"></div>
-  <script type="module" src="/src/main.jsx"></script>
-</body>
+    <meta name="robots" content="index, follow" />
+    <meta name="googlebot" content="index, follow, snippet" />
+
+    <!-- Open Graph (para compartir en redes) -->
+    <meta property="og:locale" content="es_MX" />
+    <meta property="og:site_name" content="IztapaMarket" />
+    <meta
+      property="og:title"
+      content="IztapaMarket - Directorio Local de Iztapalapa"
+    />
+    <meta
+      property="og:description"
+      content="Descubre negocios locales en Iztapalapa: restaurantes, servicios, tiendas y más cerca de ti."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://iztapamarket.com/" />
+    <meta
+      property="og:image"
+      content="https://iztapamarket.com/images/og-banner.png"
+    />
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta
+      name="twitter:title"
+      content="IztapaMarket - Directorio Local de Iztapalapa"
+    />
+    <meta
+      name="twitter:description"
+      content="Explora restaurantes, tiendas y servicios en Iztapalapa, CDMX con IztapaMarket."
+    />
+    <meta
+      name="twitter:image"
+      content="https://iztapamarket.com/images/og-banner.png"
+    />
+
+    <!-- Manifest (PWA) -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+
+    <!-- Favicons & Icons -->
+    <link rel="icon" href="/favicon.ico" />
+    <link rel="icon" type="image/png" sizes="96x96" href="/favicon-96x96.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
+    <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png" />
+
+    <!-- iOS PWA -->
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta
+      name="apple-mobile-web-app-status-bar-style"
+      content="black-translucent"
+    />
+    <meta name="apple-mobile-web-app-title" content="IztapaMarket" />
+    <meta name="format-detection" content="telephone=no" />
+
+    <!-- Android/Chrome PWA -->
+    <meta name="mobile-web-app-capable" content="yes" />
+
+    <!-- Windows -->
+    <meta name="msapplication-TileColor" content="#003366" />
+    <meta name="msapplication-TileImage" content="/icon-192.png" />
+
+    <!-- SEO extra -->
+    <link rel="canonical" href="https://iztapamarket.com/" />
+
+    <title>IztapaMarket - Directorio Local de Iztapalapa</title>
+  </head>
+  <body>
+    <noscript>
+      Necesitas habilitar JavaScript para usar esta aplicación.
+    </noscript>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

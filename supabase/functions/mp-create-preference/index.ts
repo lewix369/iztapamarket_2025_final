@@ -1,80 +1,101 @@
-import { useEffect } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
-import { toast } from "react-toastify";
+// Supabase Edge Function: mp-create-preference
+// Creates a Mercado Pago checkout preference and returns init_point
+// Expected JSON body: { email: string, plan: 'pro' | 'premium' }
 
-export default function RegistroPremiumSuccess() {
-  const [searchParams] = useSearchParams();
-  const paymentId =
-    searchParams.get("payment_id") || searchParams.get("collection_id") || null;
-  const plan = (searchParams.get("plan") || "").toLowerCase();
-  const emailFromQuery = (searchParams.get("email") || "").toLowerCase();
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
-  const navigate = useNavigate();
+const MP_ACCESS_TOKEN = Deno.env.get("MP_ACCESS_TOKEN") ?? "";
+const SUCCESS_URL = Deno.env.get("REGISTRO_SUCCESS_URL") ?? "";
+const FAILURE_URL = Deno.env.get("REGISTRO_FAILURE_URL") ?? "";
+const PENDING_URL = Deno.env.get("REGISTRO_PENDING_URL") ?? "";
 
-  useEffect(() => {
-    // El paymentId puede no venir en todos los flujos; no bloqueamos por eso.
-    if (!emailFromQuery) {
-      toast.error("⚠️ No recibimos tu correo. Por favor inicia sesión.");
-      return navigate("/ingresar");
-    }
-    console.log(
-      "Email recibido tras pago:",
-      emailFromQuery,
-      "plan:",
-      plan,
-      "paymentId:",
-      paymentId
-    );
-    const email = emailFromQuery;
+const MP_API = "https://api.mercadopago.com/checkout/preferences";
 
-    (async () => {
-      try {
-        // Obtener descripción generada desde función remota
-        const response = await fetch(
-          `${import.meta.env.VITE_FUNCTIONS_URL}/generate-description`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email, plan }),
-          }
-        );
+// Prices in MXN — adjust as needed
+const PLAN_PRICES: Record<string, number> = {
+  pro: 300,
+  premium: 500,
+};
 
-        if (!response.ok) {
-          throw new Error("Error fetching description");
-        }
-
-        const { description } = await response.json();
-
-        // Guardar negocio en supabase
-        const res = await fetch("/rest/v1/negocios", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Prefer: "return=representation",
-          },
-          body: JSON.stringify({
-            email,
-            plan_type: plan || "premium",
-            description,
-          }),
-        });
-
-        if (!res.ok) {
-          throw new Error("Error saving business");
-        }
-
-        toast.success("Negocio guardado correctamente");
-        setTimeout(() => navigate("/mi-negocio"), 2000);
-      } catch (error) {
-        toast.error("Error al guardar negocio");
-      }
-    })();
-  }, [emailFromQuery, navigate, plan, paymentId]);
-
-  return (
-    <div>
-      <h1>Registro Premium Exitoso</h1>
-      <p>Gracias por tu compra.</p>
-    </div>
-  );
+function json(data: unknown, init: ResponseInit = {}) {
+  return new Response(JSON.stringify(data), {
+    ...init,
+    headers: { "content-type": "application/json", ...(init.headers || {}) },
+  });
 }
+
+Deno.serve(async (req) => {
+  if (req.method === "GET") {
+    return json({ ok: true, message: "mp-create-preference up" });
+  }
+
+  if (req.method !== "POST") {
+    return json({ error: "Method Not Allowed" }, { status: 405 });
+  }
+
+  try {
+    const { email, plan = "premium" } = (await req
+      .json()
+      .catch(() => ({}))) as { email?: string; plan?: string };
+
+    if (!MP_ACCESS_TOKEN)
+      return json({ error: "Missing MP_ACCESS_TOKEN" }, { status: 500 });
+    if (!SUCCESS_URL || !FAILURE_URL || !PENDING_URL)
+      return json({ error: "Missing redirect URLs in env" }, { status: 500 });
+
+    if (!email) return json({ error: "Email requerido" }, { status: 400 });
+
+    const normalizedPlan = String(plan).toLowerCase();
+    const unit_price = PLAN_PRICES[normalizedPlan] ?? PLAN_PRICES.premium;
+
+    const body = {
+      items: [
+        {
+          title: `Plan ${normalizedPlan} IztapaMarket`,
+          quantity: 1,
+          currency_id: "MXN",
+          unit_price,
+        },
+      ],
+      payer: { email },
+      back_urls: {
+        success: `${SUCCESS_URL}?plan=${normalizedPlan}&email=${encodeURIComponent(
+          email
+        )}`,
+        failure: `${FAILURE_URL}?plan=${normalizedPlan}&email=${encodeURIComponent(
+          email
+        )}`,
+        pending: `${PENDING_URL}?plan=${normalizedPlan}&email=${encodeURIComponent(
+          email
+        )}`,
+      },
+      auto_return: "approved",
+      metadata: { email, plan: normalizedPlan, source: "supabase-fn" },
+      statement_descriptor: "IZTAPAMARKET",
+    };
+
+    const mpRes = await fetch(MP_API, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${MP_ACCESS_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    const data = await mpRes.json();
+    if (!mpRes.ok) {
+      console.error("MercadoPago error:", data);
+      return json(
+        { error: data?.message || "MercadoPago error" },
+        { status: 502 }
+      );
+    }
+
+    const init_point = data.init_point || data.sandbox_init_point;
+    return json({ id: data.id, init_point });
+  } catch (e) {
+    console.error("mp-create-preference internal error", e);
+    return json({ error: "Internal error" }, { status: 500 });
+  }
+});

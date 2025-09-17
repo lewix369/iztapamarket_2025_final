@@ -14,7 +14,7 @@ import BusinessDetailPage from "@/pages/BusinessDetailPage";
 import Precios from "@/pages/Precios";
 import RegisterBusinessPage from "@/pages/RegisterBusinessPage";
 import AdminPage from "@/pages/AdminPage";
-import RegistroSuccess from "@/services/RegistroSuccess";
+// import RegistroSuccess from "@/services/RegistroSuccess";  // 🔴 Ya no lo usamos
 import DownloadPage from "@/pages/DownloadPage";
 import Terminos from "@/pages/Terminos";
 import Privacidad from "@/pages/Privacidad";
@@ -38,6 +38,7 @@ import PaySuccess from "@/pages/PaySuccess";
 import PayFailure from "@/pages/PayFailure";
 import PayPending from "@/pages/PayPending";
 import Checkout from "@/pages/Checkout";
+import PlanCheckout from "@/components/PlanCheckout";
 
 function RedirectRegisterBusiness() {
   // Mantén todos los query params (plan, email, status, etc.)
@@ -81,6 +82,7 @@ function Layout() {
           <Route path="/negocio/:slug" element={<BusinessDetailPage />} />
           <Route path="/precios" element={<Precios />} />
           <Route path="/planes" element={<Precios />} />
+          <Route path="/planes-test" element={<PlanCheckout />} />
           <Route path="/checkout" element={<Checkout />} />
           <Route path="/pago/success" element={<PaySuccess />} />
           <Route path="/pago/failure" element={<PayFailure />} />
@@ -97,14 +99,17 @@ function Layout() {
             element={<RedirectRegisterBusiness />}
           />
 
-          <Route path="/registro-success" element={<RegistroSuccess />} />
+          {/* ✅ Ajustado: ahora /registro-success también usa PaySuccess */}
+          <Route path="/registro-success" element={<PaySuccess />} />
           <Route path="/registro-exitoso" element={<PaySuccess />} />
           <Route path="/registro-error" element={<PayFailure />} />
           <Route path="/registro-pendiente" element={<PayPending />} />
+
           {/* Aliases para callbacks directos de Mercado Pago */}
           <Route path="/pay-success" element={<PaySuccess />} />
           <Route path="/pay-failure" element={<PayFailure />} />
           <Route path="/pay-pending" element={<PayPending />} />
+
           <Route
             path="/registro-free-success"
             element={<RegistroFreeSuccess />}

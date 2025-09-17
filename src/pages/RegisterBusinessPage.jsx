@@ -1,4 +1,4 @@
-// 🔒 VERSIÓN DE PRODUCCIÓN — Esta versión está lista para usarse en iztapamarket.com
+// 🔒 VERSIÓN DE PRODUCCIÓN — Lista para iztapamarket.com (misma lógica, pequeños fixes seguros)
 import React, { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -21,6 +21,11 @@ const FUNCTIONS_URL =
   import.meta.env.VITE_FUNCTIONS_URL ||
   "https://qjuytjpthaxabjedqoez.functions.supabase.co";
 
+// 🔌 Selector de proveedor para crear preferencia (local backend vs Supabase Function)
+const MP_PROVIDER = import.meta.env.VITE_MP_PROVIDER || "local";
+const MP_BASE = import.meta.env.VITE_MP_BASE || "http://localhost:3000";
+
+// (No usadas ahora, pero ok tenerlas)
 const getGoogleMapsEmbedUrl = async (nombre, direccion) => {
   const fullQuery = encodeURIComponent(`${nombre}, ${direccion}`);
   try {
@@ -60,13 +65,18 @@ const getGooglePlaceImage = async (nombre, direccion) => {
   }
 };
 
+const normalizePlan = (raw) => {
+  const v = (raw || "").toLowerCase();
+  if (v === "pro" || v === "premium" || v === "free") return v;
+  return "free";
+};
+
 const RegisterBusinessPage = () => {
   const [imagenNegocio, setImagenNegocio] = useState(null);
   const [searchParams] = useSearchParams();
 
-  // ✅ ÚNICA FUENTE DE VERDAD — incluye fallback por collection_status/status
-  const selectedPlan = (searchParams.get("plan") || "free").toLowerCase();
-
+  // ✅ Plan y estado de pago (normalizado)
+  const selectedPlan = normalizePlan(searchParams.get("plan") || "free");
   const rawStatus = (
     searchParams.get("collection_status") ||
     searchParams.get("status") ||
@@ -75,10 +85,26 @@ const RegisterBusinessPage = () => {
     .toString()
     .toLowerCase();
 
+  const paidParam = (searchParams.get("paid") || "").toString().toLowerCase();
+  const hasPaymentId = !!(
+    searchParams.get("payment_id") || searchParams.get("preference_id")
+  );
+  const isApproved = rawStatus === "approved" || rawStatus === "success";
   const isPaid =
-    (searchParams.get("paid") || "").toLowerCase() === "true" ||
-    rawStatus === "approved" ||
-    rawStatus === "success";
+    paidParam === "true" ||
+    paidParam === "1" ||
+    paidParam === "approved" ||
+    paidParam === "success" ||
+    isApproved ||
+    (hasPaymentId &&
+      rawStatus !== "failure" &&
+      rawStatus !== "rejected" &&
+      rawStatus !== "cancelled");
+
+  // 🆕 Auto-disparo de pago: ?auto=1|true|yes
+  const autoParam = (searchParams.get("auto") || "").toLowerCase();
+  const autoPay =
+    autoParam === "1" || autoParam === "true" || autoParam === "yes";
 
   const emailFromUrl = (searchParams.get("email") || "").trim();
 
@@ -96,6 +122,7 @@ const RegisterBusinessPage = () => {
     descripcion: "",
     hours: "",
     services: [],
+    gallery_images: [], // <- agregado para evitar undefined
     whatsapp: "",
     email: "",
   });
@@ -104,7 +131,27 @@ const RegisterBusinessPage = () => {
 
   const [categories, setCategories] = useState([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isGeneratingAIContent, setIsGeneratingAIContent] = useState(false);
+
+  const [authUser, setAuthUser] = useState(null);
+  const [autoTriggered, setAutoTriggered] = useState(false); // 🆕 evita múltiples disparos
+
+  useEffect(() => {
+    console.debug("[Registro] mount", { selectedPlan, isPaid, autoPay });
+  }, [selectedPlan, isPaid, autoPay]);
+
+  useEffect(() => {
+    // Obtener el usuario actual al montar
+    supabase.auth.getUser().then(({ data }) => setAuthUser(data?.user || null));
+
+    // Suscribirse a cambios de sesión (login/logout)
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      setAuthUser(session?.user || null);
+    });
+
+    return () => {
+      sub?.subscription?.unsubscribe?.();
+    };
+  }, []);
 
   useEffect(() => {
     setCategories([
@@ -133,6 +180,36 @@ const RegisterBusinessPage = () => {
       if (previewUrl) URL.revokeObjectURL(previewUrl);
     };
   }, [previewUrl]);
+
+  // ⛔️ (El guard de forzar /crear-cuenta fue quitado intencionalmente)
+
+  // 🆕 Auto-inicio de Mercado Pago si venimos de crear-cuenta con ?auto=1
+  useEffect(() => {
+    if (
+      !autoTriggered &&
+      autoPay &&
+      (selectedPlan === "pro" || selectedPlan === "premium") &&
+      !isPaid
+    ) {
+      const emailToUse =
+        formData.email || emailFromUrl || authUser?.email || "";
+
+      if (!emailToUse) return; // falta email; no dispares
+      if (formData.email !== emailToUse) {
+        setFormData((prev) => ({ ...prev, email: emailToUse }));
+      }
+      setAutoTriggered(true);
+      setTimeout(() => handleCreatePreference(), 100);
+    }
+  }, [
+    autoPay,
+    autoTriggered,
+    selectedPlan,
+    isPaid,
+    formData.email,
+    emailFromUrl,
+    authUser,
+  ]);
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -233,7 +310,7 @@ const RegisterBusinessPage = () => {
   };
 
   const handleCreatePreference = async () => {
-    const email = formData.email;
+    const email = (formData.email || "").trim();
     if (!email) {
       toastify.error("Por favor ingresa un correo antes de continuar.");
       return;
@@ -245,23 +322,42 @@ const RegisterBusinessPage = () => {
     }
 
     try {
-      const resp = await fetch(`${FUNCTIONS_URL}/mp-create-preference`, {
+      const isLocal = (MP_PROVIDER || "").toLowerCase() === "local";
+      const endpoint = isLocal
+        ? `${MP_BASE.replace(/\/+$/, "")}/create_preference`
+        : `${FUNCTIONS_URL.replace(/\/+$/, "")}/mp-create-preference`;
+
+      try {
+        localStorage.setItem("reg_plan", selectedPlan);
+        localStorage.setItem("reg_email", email);
+      } catch {}
+
+      const resp = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, plan: selectedPlan }),
       });
 
       const data = await resp.json().catch(() => ({}));
-      if (!resp.ok || !data?.init_point) {
+      if (!resp.ok || !(data?.init_point || data?.sandbox_init_point)) {
+        const msg =
+          data?.error ||
+          data?.message ||
+          "No se pudo iniciar el pago. Inténtalo más tarde.";
         toast({
           title: "No se pudo iniciar el pago",
-          description: data?.error || "Inténtalo más tarde.",
+          description: msg,
           variant: "destructive",
         });
+        console.error("[MP] create_preference error:", data);
         return;
       }
-      window.location.href = data.init_point;
+
+      const initPoint = data.init_point || data.sandbox_init_point;
+      console.log("[MP] Redirigiendo a:", initPoint);
+      window.location.href = initPoint;
     } catch (error) {
+      console.error("[MP] Error al iniciar el pago:", error);
       toast({
         title: "❌ Error al iniciar el pago",
         description: error.message || "Inténtalo más tarde.",
@@ -277,25 +373,25 @@ const RegisterBusinessPage = () => {
       setError("");
       setIsSubmitting(true);
 
-      formData.services = Array.isArray(formData.services)
+      // Construye payload sin mutar formData
+      const services = Array.isArray(formData.services)
         ? formData.services
         : typeof formData.services === "string"
         ? formData.services.split(",").map((s) => s.trim())
         : [];
 
-      formData.gallery_images = Array.isArray(formData.gallery_images)
+      const gallery_images = Array.isArray(formData.gallery_images)
         ? formData.gallery_images
         : (formData.gallery_images || "")
             .split(",")
             .map((img) => img.trim())
             .filter((img) => img.length > 0);
 
-      if (!formData.imagen_url) {
-        formData.imagen_url =
-          "https://via.placeholder.com/300x200.png?text=Ejemplo";
+      let imagenUrl = formData.imagen_url;
+      if (!imagenUrl) {
+        imagenUrl = "https://via.placeholder.com/300x200.png?text=Ejemplo";
       }
 
-      let imagenUrl = formData.imagen_url;
       if (imagenNegocio) {
         const imageFileName = `${Date.now()}-${imagenNegocio.name}`;
         const { error: uploadError } = await supabase.storage
@@ -325,6 +421,9 @@ const RegisterBusinessPage = () => {
           imagen_url: imagenUrl,
           plan_type: "free",
           slug,
+          services,
+          gallery_images,
+          is_approved: true,
         };
 
         const { error } = await supabase.from("negocios").insert([newBusiness]);
@@ -334,22 +433,24 @@ const RegisterBusinessPage = () => {
           title: "Registro exitoso",
           description: "Tu negocio ha sido registrado correctamente.",
         });
-        navigate("/registro-exitoso");
+        navigate("/registro-free-success");
       } else if (selectedPlan === "pro" || selectedPlan === "premium") {
-        const {
-          data: { user },
-          error: userError,
-        } = await supabase.auth.getUser();
-        if (userError) {
-          console.warn("No se pudo obtener el usuario autenticado:", userError);
-        }
+        const userId = authUser?.id || null;
 
-        const effectiveEmail = (formData.email || emailFromUrl || "").trim();
-        if (!user && !effectiveEmail) {
-          setIsSubmitting(false);
-          toastify.error("Inicia sesión o indica un email para continuar.");
-          return;
-        }
+        const effectiveEmail = (
+          formData.email ||
+          emailFromUrl ||
+          authUser?.email ||
+          ""
+        ).trim();
+
+        const baseSlug = generateSlug(formData.nombre || "");
+        const uniqueSlug = await getUniqueSlug(
+          baseSlug ||
+            (typeof crypto !== "undefined"
+              ? crypto.randomUUID().slice(0, 8)
+              : `${Date.now()}`)
+        );
 
         const newBusiness = {
           nombre: formData.nombre,
@@ -359,21 +460,43 @@ const RegisterBusinessPage = () => {
           direccion: formData.direccion,
           imagen_url: imagenUrl,
           plan_type: selectedPlan,
+          slug: uniqueSlug,
           email: effectiveEmail || null,
-          ...(user ? { user_id: user.id } : {}),
+          user_id: userId, // null si no hay sesión
+          services,
+          gallery_images,
+          is_approved: true,
         };
 
-        const { error } = await supabase.from("negocios").insert([newBusiness]);
-        if (error) throw error;
+        // Insert con reintento por colisión de slug
+        let insertError = null;
+        let attempt = 0;
+        let currentSlug = uniqueSlug;
+        while (attempt < 2) {
+          const { error } = await supabase
+            .from("negocios")
+            .insert([{ ...newBusiness, slug: currentSlug }]);
+          if (!error) {
+            insertError = null;
+            break;
+          }
+          if (error.code === "23505" && /slug/i.test(error.message || "")) {
+            currentSlug = await getUniqueSlug(baseSlug);
+            attempt++;
+            continue;
+          }
+          insertError = error;
+          break;
+        }
+        if (insertError) throw insertError;
 
         toast({
           title: "Registro exitoso",
           description: "Tu negocio ha sido registrado correctamente.",
         });
-        navigate("/mi-negocio");
-      } else {
-        const encodedPlan = encodeURIComponent(selectedPlan);
-        navigate(`/test-pago?plan=${encodedPlan}`);
+
+        if (userId) navigate("/mi-negocio");
+        else navigate("/");
       }
     } catch (err) {
       console.error("Error al registrar negocio:", err?.message || err);
@@ -416,6 +539,11 @@ const RegisterBusinessPage = () => {
             Contratar Plan{" "}
             {selectedPlan.charAt(0).toUpperCase() + selectedPlan.slice(1)}
           </Button>
+          {authUser?.email && (
+            <p className="text-xs text-gray-500">
+              Sesión activa como <strong>{authUser.email}</strong>.
+            </p>
+          )}
         </div>
       )}
 
@@ -425,6 +553,19 @@ const RegisterBusinessPage = () => {
           onSubmit={handleSubmit}
           className="max-w-2xl mx-auto space-y-6 bg-white p-6 shadow rounded-lg"
         >
+          {(selectedPlan === "pro" || selectedPlan === "premium") &&
+            isPaid &&
+            !authUser && (
+              <div className="bg-amber-50 border border-amber-200 text-amber-700 p-3 rounded">
+                <p className="text-sm">
+                  Tu pago está confirmado. Para administrar tu negocio,{" "}
+                  <strong>inicia sesión o crea tu cuenta</strong> con el correo
+                  de compra. Te llevaremos de vuelta al formulario para
+                  finalizar.
+                </p>
+              </div>
+            )}
+
           {/* FREE */}
           {selectedPlan === "free" && (
             <>
@@ -605,33 +746,6 @@ const RegisterBusinessPage = () => {
                   placeholder="Ejemplo: The Business Address"
                 />
               </div>
-
-              {selectedPlan === "pro" && (
-                <>
-                  <div>
-                    <label className="block font-medium mb-1">
-                      Horario de atención
-                    </label>
-                    <Input
-                      name="hours"
-                      value={formData.hours}
-                      onChange={handleChange}
-                      placeholder="Ejemplo: Lunes a Viernes de 9 a 18 hrs"
-                    />
-                  </div>
-                  <div>
-                    <label className="block font-medium mb-1">
-                      Mapa (embed URL)
-                    </label>
-                    <Input
-                      name="mapa_embed_url"
-                      value={formData.mapa_embed_url}
-                      onChange={handleChange}
-                      placeholder="https://www.google.com/maps/embed?..."
-                    />
-                  </div>
-                </>
-              )}
             </>
           )}
 

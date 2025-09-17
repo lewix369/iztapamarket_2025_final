@@ -1,5 +1,4 @@
 import React from "react";
-import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
   Check,
@@ -23,19 +22,18 @@ const Precios = () => {
   const toPlanId = (name) =>
     name === "Free" ? "free" : name === "Profesional" ? "pro" : "premium";
 
-  // Redirecciones correctas (NADA de MP aquí)
+  // Redirecciones correctas (nada de MP aquí)
   const handlePlanClick = (planName) => {
     const planId = toPlanId(planName);
     const email = (localStorage.getItem("correo_negocio") || "").trim();
     const emailQS = email ? `&email=${encodeURIComponent(email)}` : "";
 
     if (planId === "free") {
-      // Siempre al formulario Free
       window.location.href = "/registro/free";
       return;
     }
 
-    // Pro/Premium: primero capturamos/confirmamos correo en /registro
+    // Pro / Premium → primero pasar por formulario /registro
     window.location.href = `/registro?plan=${planId}${emailQS}`;
   };
 
@@ -103,7 +101,7 @@ const Precios = () => {
         "Todo lo del plan Profesional",
         "Multimedia ilimitado",
         "Videos promocionales",
-        "Optimización SEO on-page avanzada para mejorar la visibilidad en buscadores",
+        "Optimización SEO avanzada",
         "Página web básica (landing de 1 página)",
         "Incluye tus datos, fotos y contacto alojados por IztapaMarket",
         "Integración con redes sociales",
