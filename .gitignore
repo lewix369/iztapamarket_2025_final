@@ -22,3 +22,11 @@ supabase/.temp/
 supabase/.branches/
 iztapamarket_directorio_2025.git/
 supabase/functions/**/.env
+.env
+.env.*
+!.env.example
+
+# logs
+*.log
+logs/
+backend.log
