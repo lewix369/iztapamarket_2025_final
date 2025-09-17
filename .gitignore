@@ -30,3 +30,7 @@ supabase/functions/**/.env
 *.log
 logs/
 backend.log
+
+# envs
+.env
+.env.*
