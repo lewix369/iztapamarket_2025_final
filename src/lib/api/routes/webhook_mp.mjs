@@ -199,13 +199,40 @@ router.all("/", async (req, res, next) => {
     }
     return res.status(200).send("OK_TEST");
   }
-  return next();
+  // si no es test, respondemos 200 para healthchecks (ngrok/MP)
+  return res.status(200).send("OK");
 });
 
 /* ── Webhook principal de Mercado Pago ───────────────────────── */
 router.post("/", express.json(), async (req, res) => {
   try {
     const { type, action, data } = req.body || {};
+
+    // --- Simulación local de APROBADO (sin pegarle a MP) ---
+    if (
+      process.env.NODE_ENV !== "production" &&
+      req.body?.type === "test_approved"
+    ) {
+      const external_reference =
+        req.body?.data?.external_reference ||
+        req.body?.external_reference ||
+        null;
+      const email = req.body?.data?.email || req.body?.metadata?.email || null;
+      const plan = (
+        req.body?.data?.plan ||
+        req.body?.metadata?.plan ||
+        "premium"
+      ).toLowerCase();
+
+      if (email) {
+        const out = await handleApproved({ email, plan, external_reference });
+        return res.status(200).json({ ok: true, via: "sim_approved", ...out });
+      }
+      // No email provisto: aun así confirmamos recepción para pruebas de integración
+      return res
+        .status(200)
+        .json({ ok: true, via: "sim_approved", note: "sin email" });
+    }
 
     const topicQ = String(
       req.query?.topic || req.body?.topic || ""

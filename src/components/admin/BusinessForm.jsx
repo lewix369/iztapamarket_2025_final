@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 // --- Convertir URL de video de YouTube a embed
 const convertToEmbedUrl = (url) => {
   if (!url) return "";
@@ -20,6 +20,7 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/components/ui/use-toast";
 import { supabase } from "@/lib/supabaseClient";
+import { Upload } from "lucide-react";
 
 // --- IA helper: invoca la Edge Function generate-description con anon key ---
 const FUNCTIONS_URL =
@@ -33,23 +34,20 @@ async function generarDescripcionAI({
   ciudad,
   tono,
 }) {
-  const resp = await fetch(`${FUNCTIONS_URL}/generate-description`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      apikey: ANON_KEY,
-      Authorization: `Bearer ${ANON_KEY}`,
-    },
-    body: JSON.stringify({
-      nombre,
-      categoria,
-      servicios: servicios || "",
-      ciudad: ciudad || "Iztapalapa, CDMX",
-      tono: tono || "profesional y cercano",
-    }),
-  });
-  if (!resp.ok) throw new Error(`AI ${resp.status}: ${await resp.text()}`);
-  const { descripcion } = await resp.json();
+  const { data, error } = await supabase.functions.invoke(
+    "generate-description",
+    {
+      body: {
+        nombre,
+        categoria,
+        servicios: servicios || "",
+        ciudad: ciudad || "Iztapalapa, CDMX",
+        tono: tono || "profesional y cercano",
+      },
+    }
+  );
+  if (error) throw new Error(error.message || "Fallo en Edge Function");
+  const { descripcion } = data || {};
   return descripcion || "";
 }
 // ---------------------------------------------------------------------------
@@ -86,10 +84,12 @@ const ImagePreview = ({ url, label }) =>
 
 const GalleryPreview = ({ images }) => {
   if (!images) return null;
-  const urls = images
-    .split(",")
-    .map((url) => url.trim())
-    .filter(Boolean);
+  const urls = Array.isArray(images)
+    ? images
+    : String(images)
+        .split(",")
+        .map((url) => url.trim())
+        .filter(Boolean);
   if (urls.length === 0) return null;
   return (
     <div className="mt-2">
@@ -140,6 +140,82 @@ const BusinessForm = ({ initialData, onSubmit, onCancel, categoriesList }) => {
   const [isGeneratingAIContent, setIsGeneratingAIContent] = useState(false);
   const [descripcionGenerada, setDescripcionGenerada] = useState(false);
   const [logoPreview, setLogoPreview] = useState("");
+  const [galleryFiles, setGalleryFiles] = useState([]);
+  const [isSavingGallery, setIsSavingGallery] = useState(false);
+
+  const handleSaveGallery = useCallback(async () => {
+    try {
+      if (!galleryFiles?.length) return;
+      setIsSavingGallery(true);
+
+      // 1) Negocio y usuario
+      const negocioId = initialData?.id;
+      if (!negocioId) throw new Error("No se encontró el ID del negocio.");
+
+      const { data: sess } = await supabase.auth.getSession();
+      const userId = sess?.session?.user?.id || "anon";
+
+      // 2) Subir archivos
+      const uploadedUrls = [];
+      for (let i = 0; i < galleryFiles.length; i++) {
+        const file = galleryFiles[i];
+        const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
+        const path = `gallery/${negocioId}-${Date.now()}-${i}.${ext}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from("negocios")
+          .upload(path, file, { upsert: false, cacheControl: "3600" });
+
+        if (uploadError) throw uploadError;
+
+        const { data: pub } = supabase.storage
+          .from("negocios")
+          .getPublicUrl(path);
+        if (pub?.publicUrl) uploadedUrls.push(pub.publicUrl);
+      }
+
+      // 3) Mezclar con las que ya estuvieran en el form (cadena o arreglo)
+      const prev = Array.isArray(formData.gallery_images)
+        ? formData.gallery_images
+        : String(formData.gallery_images || "")
+            .split(",")
+            .map((u) => u.trim())
+            .filter(Boolean);
+      const finalUrls = [...prev, ...uploadedUrls];
+
+      // 4) Guardar en la BD como arreglo
+      const { error: upError } = await supabase
+        .from("negocios")
+        .update({ gallery_images: finalUrls })
+        .eq("id", negocioId);
+      if (upError) throw upError;
+
+      // 5) Refrescar estado del formulario y limpiar selección
+      setFormData((p) => ({ ...p, gallery_images: finalUrls }));
+      setGalleryFiles([]);
+
+      toast({
+        title: "✅ Galería actualizada",
+        description: `${uploadedUrls.length} imagen(es) guardadas.`,
+      });
+    } catch (err) {
+      console.error("[Galería] Error:", err);
+      toast({
+        title: "Error al subir galería",
+        description: String(err?.message || err),
+        variant: "destructive",
+      });
+    } finally {
+      setIsSavingGallery(false);
+    }
+  }, [galleryFiles, initialData?.id, formData.gallery_images, toast]);
+
+  useEffect(() => {
+    if (import.meta?.env?.DEV) {
+      console.log("[IA][debug] FUNCTIONS_URL:", FUNCTIONS_URL);
+      console.log("[IA][debug] ANON key present:", Boolean(ANON_KEY));
+    }
+  }, []);
 
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -250,55 +326,7 @@ const BusinessForm = ({ initialData, onSubmit, onCancel, categoriesList }) => {
     });
   };
 
-  const handleGalleryUpload = async (files) => {
-    const urls = [];
-    const plan = formData.plan_type.toLowerCase();
-    const max = plan === "premium" ? 6 : 3;
-
-    if (files.length > max) {
-      toast({
-        title: "Límite excedido",
-        description: `Máximo permitido: ${max} imágenes.`,
-        variant: "destructive",
-      });
-      return;
-    }
-
-    for (const file of files) {
-      const fileExt = file.name.split(".").pop();
-      const fileName = `${Date.now()}-${file.name}`;
-      const filePath = `galeria/${fileName}`;
-
-      const { error: uploadError } = await supabase.storage
-        .from("negocios")
-        .upload(filePath, file);
-
-      if (uploadError) {
-        toast({
-          title: "Error al subir una imagen",
-          description: uploadError.message,
-          variant: "destructive",
-        });
-        continue;
-      }
-
-      const { data: publicUrlData } = supabase.storage
-        .from("negocios")
-        .getPublicUrl(filePath);
-
-      urls.push(publicUrlData.publicUrl);
-    }
-
-    setFormData((prev) => ({
-      ...prev,
-      gallery_images: urls.join(", "),
-    }));
-
-    toast({
-      title: "Galería actualizada",
-      description: `${urls.length} imágenes cargadas correctamente.`,
-    });
-  };
+  // Genera un slug único si el base ya existe (agrega -2, -3, ...)
 
   // Genera un slug único si el base ya existe (agrega -2, -3, ...)
   async function getUniqueSlug(base) {
@@ -397,10 +425,12 @@ const BusinessForm = ({ initialData, onSubmit, onCancel, categoriesList }) => {
         .split(",")
         .map((s) => s.trim())
         .filter((s) => s !== ""),
-      gallery_images: (formData.gallery_images || "")
-        .split(",")
-        .map((img) => img.trim())
-        .filter((img) => img !== ""),
+      gallery_images: Array.isArray(formData.gallery_images)
+        ? formData.gallery_images
+        : String(formData.gallery_images || "")
+            .split(",")
+            .map((img) => img.trim())
+            .filter(Boolean),
       // mantener menu explícito
       menu: formData.menu,
       // asegurar que guardamos el embed correcto aunque el usuario ponga la URL normal
@@ -537,66 +567,86 @@ const BusinessForm = ({ initialData, onSubmit, onCancel, categoriesList }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [formData.video_url]);
 
-  const handleGenerateAIContent = async () => {
-    const serviciosProcesados = Array.isArray(formData.services)
-      ? formData.services.filter((s) => s.trim() !== "").join(", ")
-      : typeof formData.services === "string"
-      ? formData.services
-      : "";
+  const handleGenerateAIClick = useCallback(
+    async (e) => {
+      try {
+        if (e) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
 
-    const planNormalizado = (formData.plan_type || "").trim().toLowerCase();
-    if (planNormalizado !== "pro" && planNormalizado !== "premium") {
-      toast({
-        title: "Función no disponible",
-        description:
-          "La generación con IA solo está disponible para Pro y Premium.",
-        variant: "destructive",
-      });
-      return;
-    }
+        console.log("[IA] Click en Generar descripción", {
+          plan: (formData.plan_type || "").toLowerCase(),
+          nombre: formData.nombre,
+          categoria: formData.categoria,
+        });
 
-    if (!formData.nombre || !formData.categoria) {
-      toast({
-        title: "Información requerida",
-        description:
-          "Ingresa al menos nombre y categoría para generar la descripción.",
-        variant: "destructive",
-      });
-      return;
-    }
+        const serviciosProcesados = Array.isArray(formData.services)
+          ? formData.services.filter((s) => s.trim() !== "").join(", ")
+          : typeof formData.services === "string"
+          ? formData.services
+          : "";
 
-    toast({
-      title: "⚙️ Generando con IA...",
-      description: "Esto puede tardar unos segundos.",
-    });
-    setIsGeneratingAIContent(true);
-    try {
-      const descripcion = await generarDescripcionAI({
-        nombre: formData.nombre,
-        categoria: formData.categoria,
-        servicios: serviciosProcesados,
-        ciudad: formData?.ciudad || undefined,
-        tono: "profesional y cercano",
-      });
-      if (!descripcion || typeof descripcion !== "string") {
-        throw new Error("La descripción generada es inválida.");
+        const planNormalizado = (formData.plan_type || "").trim().toLowerCase();
+        if (planNormalizado !== "pro" && planNormalizado !== "premium") {
+          toast({
+            title: "Función no disponible",
+            description:
+              "La generación con IA solo está disponible para Pro y Premium.",
+            variant: "destructive",
+          });
+          return;
+        }
+
+        if (!formData.nombre) {
+          toast({
+            title: "Información requerida",
+            description:
+              "Ingresa al menos el nombre del negocio para generar la descripción.",
+            variant: "destructive",
+          });
+          return;
+        }
+
+        toast({
+          title: "⚙️ Generando con IA...",
+          description: "Esto puede tardar unos segundos.",
+        });
+
+        setIsGeneratingAIContent(true);
+
+        const descripcion = await generarDescripcionAI({
+          nombre: formData.nombre,
+          categoria: formData.categoria || "general",
+          servicios: serviciosProcesados,
+          ciudad: formData?.ciudad || "Iztapalapa, CDMX",
+          tono: "profesional y cercano",
+        });
+
+        if (!descripcion || typeof descripcion !== "string") {
+          throw new Error("La descripción generada es inválida.");
+        }
+
+        setFormData((prev) => ({ ...prev, descripcion }));
+        setDescripcionGenerada(true);
+
+        toast({
+          title: "✅ Listo",
+          description: "Descripción generada exitosamente.",
+        });
+      } catch (error) {
+        console.error("[IA] Error al generar descripción:", error);
+        toast({
+          title: "Error",
+          description: error.message || "No se pudo generar la descripción.",
+          variant: "destructive",
+        });
+      } finally {
+        setIsGeneratingAIContent(false);
       }
-      setFormData((prev) => ({ ...prev, descripcion }));
-      setDescripcionGenerada(true);
-      toast({
-        title: "✅ Listo",
-        description: "Descripción generada exitosamente.",
-      });
-    } catch (error) {
-      toast({
-        title: "Error",
-        description: error.message || "No se pudo generar la descripción.",
-        variant: "destructive",
-      });
-    } finally {
-      setIsGeneratingAIContent(false);
-    }
-  };
+    },
+    [formData, toast]
+  );
 
   // --- Determinar el plan activo ---
   const searchParams = new URLSearchParams(window.location.search);
@@ -619,6 +669,41 @@ const BusinessForm = ({ initialData, onSubmit, onCancel, categoriesList }) => {
             value={formData.nombre}
             onChange={handleChange}
           />
+          {/* Categoría */}
+          {Array.isArray(categoriesList) && categoriesList.length > 0 ? (
+            <div className="mt-2">
+              <label className="block text-sm font-medium mb-1">
+                Categoría
+              </label>
+              <Select
+                value={formData.categoria || ""}
+                onValueChange={(v) => handleSelectChange("categoria", v)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecciona una categoría" />
+                </SelectTrigger>
+                <SelectContent>
+                  {categoriesList.map((cat) => {
+                    const value = cat?.slug_categoria || cat?.slug || cat;
+                    const label = cat?.nombre || cat?.label || value;
+                    return (
+                      <SelectItem key={value} value={value}>
+                        {label}
+                      </SelectItem>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
+            </div>
+          ) : (
+            <LabeledInput
+              label="Categoría"
+              name="categoria"
+              value={formData.categoria}
+              onChange={handleChange}
+              placeholder="Ej. alimentos-y-bebidas"
+            />
+          )}
           <LabeledInput
             label="Teléfono"
             name="telefono"
@@ -728,6 +813,41 @@ const BusinessForm = ({ initialData, onSubmit, onCancel, categoriesList }) => {
             value={formData.nombre}
             onChange={handleChange}
           />
+          {/* Categoría */}
+          {Array.isArray(categoriesList) && categoriesList.length > 0 ? (
+            <div className="mt-2">
+              <label className="block text-sm font-medium mb-1">
+                Categoría
+              </label>
+              <Select
+                value={formData.categoria || ""}
+                onValueChange={(v) => handleSelectChange("categoria", v)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecciona una categoría" />
+                </SelectTrigger>
+                <SelectContent>
+                  {categoriesList.map((cat) => {
+                    const value = cat?.slug_categoria || cat?.slug || cat;
+                    const label = cat?.nombre || cat?.label || value;
+                    return (
+                      <SelectItem key={value} value={value}>
+                        {label}
+                      </SelectItem>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
+            </div>
+          ) : (
+            <LabeledInput
+              label="Categoría"
+              name="categoria"
+              value={formData.categoria}
+              onChange={handleChange}
+              placeholder="Ej. alimentos-y-bebidas"
+            />
+          )}
           <LabeledInput
             label="Teléfono"
             name="telefono"
@@ -847,6 +967,41 @@ const BusinessForm = ({ initialData, onSubmit, onCancel, categoriesList }) => {
             value={formData.nombre}
             onChange={handleChange}
           />
+          {/* Categoría */}
+          {Array.isArray(categoriesList) && categoriesList.length > 0 ? (
+            <div className="mt-2">
+              <label className="block text-sm font-medium mb-1">
+                Categoría
+              </label>
+              <Select
+                value={formData.categoria || ""}
+                onValueChange={(v) => handleSelectChange("categoria", v)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecciona una categoría" />
+                </SelectTrigger>
+                <SelectContent>
+                  {categoriesList.map((cat) => {
+                    const value = cat?.slug_categoria || cat?.slug || cat;
+                    const label = cat?.nombre || cat?.label || value;
+                    return (
+                      <SelectItem key={value} value={value}>
+                        {label}
+                      </SelectItem>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
+            </div>
+          ) : (
+            <LabeledInput
+              label="Categoría"
+              name="categoria"
+              value={formData.categoria}
+              onChange={handleChange}
+              placeholder="Ej. alimentos-y-bebidas"
+            />
+          )}
           <LabeledInput
             label="Teléfono"
             name="telefono"
@@ -969,9 +1124,66 @@ const BusinessForm = ({ initialData, onSubmit, onCancel, categoriesList }) => {
           <LabeledInput
             label="Imágenes de galería (subir imágenes)"
             name="gallery_images"
-            value={formData.gallery_images}
+            value={
+              Array.isArray(formData.gallery_images)
+                ? formData.gallery_images.join(", ")
+                : formData.gallery_images
+            }
             onChange={handleChange}
           />
+          {/* Subida de galería (Premium) */}
+          <div className="space-y-2 mt-2">
+            <input
+              id="gallery-input"
+              type="file"
+              multiple
+              accept="image/*"
+              onChange={(e) =>
+                setGalleryFiles(Array.from(e.target.files || []))
+              }
+              className="hidden"
+            />
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                onClick={() =>
+                  document.getElementById("gallery-input")?.click()
+                }
+                className="inline-flex items-center gap-2"
+              >
+                <Upload className="w-4 h-4" /> Elegir archivos
+              </Button>
+              <Button
+                id="save-gallery"
+                type="button"
+                disabled={isSavingGallery || !galleryFiles?.length}
+                aria-busy={isSavingGallery ? "true" : "false"}
+                onClick={handleSaveGallery}
+              >
+                {isSavingGallery
+                  ? "Guardando..."
+                  : "Guardar imágenes seleccionadas"}
+              </Button>
+            </div>
+
+            {/* Previews temporales antes de guardar */}
+            {galleryFiles?.length > 0 && (
+              <div className="flex flex-wrap gap-3 mt-2">
+                {galleryFiles.map((f, i) => (
+                  <div
+                    key={i}
+                    className="relative w-28 h-28 border rounded overflow-hidden"
+                  >
+                    <img
+                      src={URL.createObjectURL(f)}
+                      alt={`preview-${i}`}
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
           {formData.gallery_images && (
             <GalleryPreview images={formData.gallery_images} />
           )}
@@ -1011,15 +1223,20 @@ const BusinessForm = ({ initialData, onSubmit, onCancel, categoriesList }) => {
             placeholder="Aquí aparecerá la descripción generada o escribe la tuya"
             className="w-full"
           />
-          <Button
-            type="button"
-            onClick={handleGenerateAIContent}
-            disabled={isGeneratingAIContent}
-          >
-            {isGeneratingAIContent
-              ? "Generando..."
-              : "Generar descripción con IA"}
-          </Button>
+          {plan === "premium" && (
+            <button
+              type="button"
+              id="ai-generate"
+              onClick={handleGenerateAIClick}
+              disabled={isGeneratingAIContent}
+              aria-busy={isGeneratingAIContent ? "true" : "false"}
+              className="inline-flex items-center justify-center rounded-md border px-4 py-2 text-sm font-medium mt-2 disabled:opacity-60"
+            >
+              {isGeneratingAIContent
+                ? "Generando..."
+                : "Generar descripción con IA"}
+            </button>
+          )}
         </div>
       )}
 

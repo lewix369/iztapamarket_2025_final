@@ -197,6 +197,8 @@ const MiNegocioPage = () => {
   const [loadingLogo, setLoadingLogo] = useState(false);
   const [useSimpleCover, setUseSimpleCover] = useState(true);
   const [useSimpleLogo, setUseSimpleLogo] = useState(true);
+  // Loading: generación de descripción con IA
+  const [isGeneratingDesc, setIsGeneratingDesc] = useState(false);
 
   // Campos simples para IA
   const [coverStyle, setCoverStyle] = useState("Moderno");
@@ -394,8 +396,17 @@ const MiNegocioPage = () => {
   const [previewImage, setPreviewImage] = useState(null);
   const [modoEdicion, setModoEdicion] = useState(false);
   const [editingPromotion, setEditingPromotion] = useState(null);
+  // Modal edición promoción
+  const [isEditOpen, setIsEditOpen] = useState(false);
   const [imagenActual, setImagenActual] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
+
+  // Cierra el modal cuando se sale del modo edición
+  useEffect(() => {
+    if (!modoEdicion && editingPromotion === null) {
+      setIsEditOpen(false);
+    }
+  }, [modoEdicion, editingPromotion]);
 
   const removePromoImage = () => {
     if (promoImagePreview?.preview)
@@ -509,7 +520,8 @@ const MiNegocioPage = () => {
       try {
         // 1) Query params del retorno de Mercado Pago
         const planFromUrl = (params.get("plan") || "").toLowerCase(); // pro | premium
-        const paidSuccess = (params.get("paid") || "").toLowerCase() === "success";
+        const paidSuccess =
+          (params.get("paid") || "").toLowerCase() === "success";
         const emailFromUrl = params.get("email") || null;
 
         // 2) Checar sesión de forma segura (sin lanzar error)
@@ -528,23 +540,47 @@ const MiNegocioPage = () => {
           return;
         }
 
-        // 4) Con sesión: buscar negocio por user_id o email
-        const { data: row, error } = await supabase
+        // 4) Con sesión: buscar TODOS los negocios por user_id o email (evitar escoger el errado)
+        const { data: rows, error: selErr } = await supabase
           .from("negocios")
           .select("*")
           .or(`user_id.eq.${userId},email.eq.${userEmail}`)
-          .limit(1)
-          .maybeSingle();
+          .eq("is_deleted", false)
+          .order("updated_at", { ascending: false })
+          .limit(20);
 
-        if (error) {
-          console.error("Error al obtener negocio:", error?.message, error);
+        if (selErr) {
+          console.error("Error al obtener negocio:", selErr?.message, selErr);
           setAuthChecked(true);
           return;
         }
 
-        let negocio = row || null;
+        // Elegir el mejor candidato:
+        // prioridad: premium > pro > free, y luego más reciente
+        const priority = (p = "") => {
+          const v = String(p).toLowerCase();
+          if (v === "premium") return 3;
+          if (v === "pro") return 2;
+          if (v === "free") return 1;
+          return 0;
+        };
+        let negocio =
+          (rows || [])
+            .sort((a, b) => {
+              const pa = priority(a?.plan_type);
+              const pb = priority(b?.plan_type);
+              if (pb !== pa) return pb - pa;
+              const ta = new Date(
+                a?.updated_at || a?.created_at || 0
+              ).getTime();
+              const tb = new Date(
+                b?.updated_at || b?.created_at || 0
+              ).getTime();
+              return tb - ta;
+            })
+            .at(0) || null;
 
-        // 5) Si no existe, crear uno básico (por si venía de pago)
+        // 5) Si NO existe, crear uno básico (por si venía de pago)
         if (!negocio && (emailFromUrl || userEmail)) {
           const basePayload = {
             user_id: userId,
@@ -564,7 +600,7 @@ const MiNegocioPage = () => {
           if (!insertErr) negocio = inserted;
         }
 
-        // 6) Aplicar plan si venía en la URL
+        // 6) Aplicar plan si venía en la URL (y difiere)
         if (negocio && (planFromUrl === "pro" || planFromUrl === "premium")) {
           if ((negocio.plan_type || "").toLowerCase() !== planFromUrl) {
             const { data: updated, error: upErr } = await supabase
@@ -580,12 +616,16 @@ const MiNegocioPage = () => {
           }
         }
 
+        // 7) Normalizar el negocio encontrado y fijar user_id si falta
         if (negocio) {
-          // Adjunta user_id si falta
           if (!negocio.user_id && userId) {
-            await supabase.from("negocios").update({ user_id: userId }).eq("id", negocio.id);
+            await supabase
+              .from("negocios")
+              .update({ user_id: userId })
+              .eq("id", negocio.id);
             negocio.user_id = userId;
           }
+
           setBusiness({
             id: negocio.id,
             ...negocio,
@@ -597,7 +637,7 @@ const MiNegocioPage = () => {
           });
         }
 
-        // 7) Limpia la URL si venías de pago
+        // 8) Limpia la URL si venías de pago
         if (paidSuccess) {
           const clean = new URL(window.location.href);
           clean.searchParams.delete("paid");
@@ -782,6 +822,22 @@ const MiNegocioPage = () => {
       imagen_url: p.imagen_url || p.promocion_imagen || null,
     });
     setPreviewImage(p.imagen_url || p.promocion_imagen || null);
+    setIsEditOpen(true);
+  };
+
+  const closeEdit = () => {
+    setIsEditOpen(false);
+    setModoEdicion(false);
+    setEditingPromotion(null);
+    setPromo({
+      titulo: "",
+      descripcion: "",
+      fecha_inicio: "",
+      fecha_fin: "",
+      imagen_file: null,
+      imagen_url: null,
+    });
+    setPreviewImage(null);
   };
 
   const handleDeletePromocion = async (promocionId) => {
@@ -981,17 +1037,39 @@ const MiNegocioPage = () => {
     }
   };
 
-  // IA descripción (Edge function)
+  // IA descripción (Edge function) mejorada: autoguarda en Supabase la descripción generada
   const handleGenerateAI = async () => {
-    if (!business.nombre || !business.servicios) {
+    if (isGeneratingDesc) return;
+    // Verificación estricta: IA solo para plan Premium
+    const plan = (business?.plan_type || "").toLowerCase();
+    if (plan !== "premium") {
       toast({
-        title: "Faltan datos",
+        title: "Función Premium",
         description:
-          "Completa 'Nombre' y 'Servicios' antes de generar la descripción.",
+          "La generación con IA de la descripción solo está disponible en el Plan Premium.",
         variant: "destructive",
       });
       return;
     }
+
+    // Solo requerimos nombre; servicios es opcional
+    if (!business.nombre) {
+      toast({
+        title: "Falta el nombre",
+        description:
+          "Completa el campo 'Nombre' antes de generar la descripción.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    console.log("[IA] Click en Generar descripción con IA", {
+      nombre: business.nombre,
+      categoria: business.categoria,
+      servicios: business.servicios,
+    });
+
+    setIsGeneratingDesc(true);
     try {
       const { data, error } = await supabase.functions.invoke(
         "generate-description",
@@ -999,7 +1077,7 @@ const MiNegocioPage = () => {
           body: {
             nombre: business.nombre,
             categoria: business.categoria || "negocio local",
-            servicios: business.servicios,
+            servicios: business.servicios || "",
           },
         }
       );
@@ -1018,16 +1096,40 @@ const MiNegocioPage = () => {
       if (!descripcion) {
         toast({
           title: "Error al generar",
-          description: "No se pudo generar la descripción.",
+          description: "La función no devolvió una descripción.",
           variant: "destructive",
         });
         return;
       }
 
+      // 1) Reflejar en UI
       setBusiness((prev) => ({ ...prev, descripcion }));
+
+      // 2) Guardar de inmediato en la base de datos
+      if (business?.id) {
+        const { error: updateError } = await supabase
+          .from("negocios")
+          .update({ descripcion })
+          .eq("id", business.id);
+
+        if (updateError) {
+          console.error(
+            "❌ No se pudo guardar automáticamente:",
+            updateError.message
+          );
+          toast({
+            title: "Descripción generada",
+            description:
+              "Se rellenó el texto, pero no se pudo guardar automáticamente. Da clic en “Guardar cambios”.",
+            variant: "destructive",
+          });
+          return;
+        }
+      }
+
       toast({
         title: "Descripción generada",
-        description: "Texto autocompletado con IA.",
+        description: "Guardada en tu negocio ✅",
       });
     } catch (err) {
       console.error("Fetch error:", err);
@@ -1036,6 +1138,8 @@ const MiNegocioPage = () => {
         description: "No se pudo contactar la función de Supabase.",
         variant: "destructive",
       });
+    } finally {
+      setIsGeneratingDesc(false);
     }
   };
 
@@ -1168,6 +1272,146 @@ const MiNegocioPage = () => {
         }
       }
     );
+  };
+
+  // Helpers mapa: extraer lat/lng y abrir direcciones
+  // ——— WhatsApp helpers (normalizar/validar y link de vista previa) ———
+  const normalizeWhats = (s = "") => {
+    const digits = String(s).replace(/\D/g, "");
+    if (!digits) return "";
+    // si son 10 dígitos, asumimos MX y anteponemos +52
+    if (digits.length === 10) return "+52" + digits;
+    if (
+      digits.startsWith("52") &&
+      (digits.length === 12 || digits.length === 13)
+    )
+      return "+" + digits.replace(/^\+/, "");
+    return digits.startsWith("+") ? digits : "+" + digits;
+  };
+  const isValidWhats = (s = "") =>
+    /^(?:\+)?\d{7,15}$/.test(String(s).replace(/\s/g, ""));
+  const toWaLink = (s = "") => {
+    const normalized = normalizeWhats(s);
+    const onlyDigits = normalized.replace(/\D/g, "");
+    return onlyDigits ? `https://wa.me/${onlyDigits}` : null;
+  };
+  const extractLatLngFromEmbed = (url = "") => {
+    try {
+      // Formatos soportados:
+      // 1) https://www.google.com/maps?q=LAT,LNG&... (o &amp;)
+      // 2) https://www.google.com/maps/@LAT,LNG,ZOOMz...
+      const decoded = decodeURIComponent(url).replace(/&amp;/g, "&");
+      let m = decoded.match(/maps\?q=(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)/i);
+      if (m) return { lat: parseFloat(m[1]), lng: parseFloat(m[2]) };
+      m = decoded.match(/maps\/@(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)/i);
+      if (m) return { lat: parseFloat(m[1]), lng: parseFloat(m[2]) };
+      return null;
+    } catch {
+      return null;
+    }
+  };
+
+  const buildDirectionsUrl = () => {
+    const coords = extractLatLngFromEmbed(business?.mapa_embed_url || "");
+    if (coords) {
+      const dest = `${coords.lat},${coords.lng}`;
+      return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
+        dest
+      )}`;
+    }
+    if (business?.direccion) {
+      return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
+        business.direccion
+      )}`;
+    }
+    return null;
+  };
+
+  const buildExternalMapLinks = () => {
+    const coords = extractLatLngFromEmbed(business?.mapa_embed_url || "");
+    const address = (business?.direccion || "").trim();
+    const name = (business?.nombre || "Destino").trim();
+
+    // Uber deep link builder
+    const uberFromCoords = (lat, lng) =>
+      `https://m.uber.com/ul/?action=setPickup&pickup=my_location&dropoff[latitude]=${lat}&dropoff[longitude]=${lng}&dropoff[nickname]=${encodeURIComponent(
+        name
+      )}`;
+    const uberFromAddress = (addr) =>
+      `https://m.uber.com/ul/?action=setPickup&pickup=my_location&dropoff[formatted_address]=${encodeURIComponent(
+        addr
+      )}&dropoff[nickname]=${encodeURIComponent(name)}`;
+
+    // Didi (universal fallback). Intentará abrir la app; si no, redirige a landing.
+    const didiFromCoords = (lat, lng) =>
+      `https://page.didiglobal.com/passenger/landing?dropoff_latitude=${lat}&dropoff_longitude=${lng}&utm_source=iztapamarket`;
+    const didiFromAddress = (addr) =>
+      `https://page.didiglobal.com/passenger/landing?dropoff_address=${encodeURIComponent(
+        addr
+      )}&utm_source=iztapamarket`;
+
+    if (coords) {
+      const { lat, lng } = coords;
+      return {
+        google: `https://www.google.com/maps/dir/?api=1&destination=${lat}%2C${lng}`,
+        waze: `https://waze.com/ul?ll=${lat}%2C${lng}&navigate=yes`,
+        uber: uberFromCoords(lat, lng),
+        didi: didiFromCoords(lat, lng),
+      };
+    }
+
+    if (address) {
+      const q = encodeURIComponent(address);
+      return {
+        google: `https://www.google.com/maps/dir/?api=1&destination=${q}`,
+        waze: `https://waze.com/ul?q=${q}&navigate=yes`,
+        uber: uberFromAddress(address),
+        didi: didiFromAddress(address),
+      };
+    }
+
+    return { google: null, waze: null, uber: null, didi: null };
+  };
+
+  const copyAddressToClipboard = async () => {
+    const text =
+      (business?.direccion || "").trim() ||
+      (extractLatLngFromEmbed(business?.mapa_embed_url || "")
+        ? `${extractLatLngFromEmbed(business.mapa_embed_url).lat},${
+            extractLatLngFromEmbed(business.mapa_embed_url).lng
+          }`
+        : "");
+    if (!text) {
+      alert("No hay dirección o coordenadas para copiar.");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      alert("Dirección copiada al portapapeles.");
+    } catch {
+      // Fallback
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+      alert("Dirección copiada al portapapeles.");
+    }
+  };
+
+  const handleClearMap = async () => {
+    try {
+      await supabase
+        .from("negocios")
+        .update({ mapa_embed_url: "" })
+        .eq("id", business.id);
+      setBusiness((prev) => ({ ...prev, mapa_embed_url: "" }));
+      alert("Mapa eliminado.");
+    } catch (e) {
+      console.error("No se pudo eliminar el mapa:", e?.message || e);
+      alert("Error al eliminar el mapa.");
+    }
   };
 
   // Eliminar negocio
@@ -1357,9 +1601,7 @@ const MiNegocioPage = () => {
           portada_url: updatedBusiness.portada_url || "",
           logo_url: updatedBusiness.logo_url || "",
           video_url:
-            updatedBusiness.video_embed_url ||
-            updatedBusiness.video_url ||
-            "",
+            updatedBusiness.video_embed_url || updatedBusiness.video_url || "",
           video_embed_url: updatedBusiness.video_embed_url || "",
         });
       }
@@ -1485,8 +1727,7 @@ const MiNegocioPage = () => {
         <div className="bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded mb-4">
           <p className="mb-2">
             Acabas de completar tu pago. Para habilitar tu formulario, inicia
-            sesión con el correo{" "}
-            <strong>{params.get("email")}</strong>.
+            sesión con el correo <strong>{params.get("email")}</strong>.
           </p>
           <a
             href={`/login?redirect=/mi-negocio&email=${encodeURIComponent(
@@ -1557,6 +1798,154 @@ const MiNegocioPage = () => {
               setBusiness({ ...business, telefono: e.target.value })
             }
           />
+          {/* WhatsApp (opcional) */}
+          <label className="mt-2 block">WhatsApp (opcional)</label>
+          <Input
+            type="tel"
+            name="whatsapp"
+            placeholder="+52 55 1234 5678"
+            value={business.whatsapp || ""}
+            onChange={(e) =>
+              setBusiness({ ...business, whatsapp: e.target.value })
+            }
+            onBlur={(e) => {
+              const v = normalizeWhats(e.target.value);
+              if (v && v !== business.whatsapp)
+                setBusiness((prev) => ({ ...prev, whatsapp: v }));
+            }}
+          />
+          <div className="text-xs text-gray-500 mt-1 flex items-center gap-2">
+            <span>
+              Ingresa tu número con lada internacional. Si dejas vacío, solo se
+              mostrará el botón de llamada.
+            </span>
+            {isValidWhats(business.whatsapp) && (
+              <a
+                href={toWaLink(business.whatsapp)}
+                target="_blank"
+                rel="noreferrer"
+                className="underline text-green-700"
+                title="Probar enlace de WhatsApp"
+              >
+                Probar WhatsApp
+              </a>
+            )}
+          </div>
+
+          {/* Mapa / Ubicación (solo Pro y Premium) */}
+          {(plan === "pro" || plan === "premium") && (
+            <>
+              <h2 className="text-xl font-semibold text-gray-900 mt-6">
+                Mapa y ubicación
+              </h2>
+              <div className="h-px bg-gray-200 my-3" />
+
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  onClick={handleSetCurrentLocation}
+                  className="bg-green-600 text-white hover:bg-green-700"
+                >
+                  Usar mi ubicación actual
+                </Button>
+                {(() => {
+                  const links = buildExternalMapLinks();
+                  return (
+                    <>
+                      {links.google && (
+                        <a
+                          href={links.google}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center px-3 py-2 rounded border text-blue-700 border-blue-300 hover:bg-blue-50"
+                          title="Abrir indicaciones en Google Maps"
+                        >
+                          Google Maps
+                        </a>
+                      )}
+                      {links.waze && (
+                        <a
+                          href={links.waze}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center px-3 py-2 rounded border text-purple-700 border-purple-300 hover:bg-purple-50"
+                          title="Abrir en Waze"
+                        >
+                          Waze
+                        </a>
+                      )}
+                      {links.uber && (
+                        <a
+                          href={links.uber}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center px-3 py-2 rounded border text-black border-gray-300 hover:bg-gray-50"
+                          title="Pedir Uber"
+                        >
+                          Uber
+                        </a>
+                      )}
+                      {links.didi && (
+                        <a
+                          href={links.didi}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center px-3 py-2 rounded border text-orange-700 border-orange-300 hover:bg-orange-50"
+                          title="Abrir DiDi (beta)"
+                        >
+                          DiDi
+                        </a>
+                      )}
+                      {(links.google ||
+                        links.waze ||
+                        links.uber ||
+                        links.didi) && (
+                        <Button
+                          type="button"
+                          onClick={copyAddressToClipboard}
+                          variant="outline"
+                          className="text-gray-700"
+                          title="Copiar dirección o coordenadas"
+                        >
+                          Copiar dirección
+                        </Button>
+                      )}
+                    </>
+                  );
+                })()}
+                {business.mapa_embed_url && (
+                  <Button
+                    type="button"
+                    onClick={handleClearMap}
+                    variant="destructive"
+                    className="text-white"
+                    title="Quitar mapa embebido"
+                  >
+                    Quitar mapa
+                  </Button>
+                )}
+              </div>
+
+              {/* Preview del mapa si existe */}
+              {business.mapa_embed_url ? (
+                <div className="mt-3 rounded-lg overflow-hidden border">
+                  <iframe
+                    src={(business.mapa_embed_url || "").replace(/&amp;/g, "&")}
+                    title="Mapa del negocio"
+                    className="w-full"
+                    style={{ height: 320 }}
+                    loading="lazy"
+                    referrerPolicy="no-referrer-when-downgrade"
+                  />
+                </div>
+              ) : (
+                <p className="mt-2 text-xs text-gray-500">
+                  Aún no hay mapa embebido. Pulsa "Usar mi ubicación actual" o
+                  guarda tu dirección y usa "Abrir en Google Maps".
+                </p>
+              )}
+            </>
+          )}
         </>
       )}
 
@@ -1574,10 +1963,36 @@ const MiNegocioPage = () => {
               setBusiness((prev) => ({ ...prev, descripcion: e.target.value }))
             }
           />
+          {/* Campo de servicios para habilitar IA */}
+          <label className="mt-3 block text-sm font-medium text-gray-700">
+            Servicios (separados por coma)
+          </label>
+          <Input
+            type="text"
+            placeholder="tacos al pastor, alambres, aguas frescas"
+            value={business.servicios || ""}
+            onChange={(e) =>
+              setBusiness((prev) => ({ ...prev, servicios: e.target.value }))
+            }
+          />
           {plan === "premium" && (
-            <Button className="mt-2" onClick={handleGenerateAI}>
-              Generar descripción con IA
-            </Button>
+            <>
+              <Button
+                id="ai-generate"
+                type="button"
+                className="mt-2 bg-green-600 text-white hover:bg-green-700 disabled:opacity-60"
+                onClick={handleGenerateAI}
+                disabled={isGeneratingDesc}
+                aria-busy={isGeneratingDesc ? "true" : "false"}
+              >
+                {isGeneratingDesc
+                  ? "Generando..."
+                  : "Generar descripción con IA"}
+              </Button>
+              <p className="text-xs text-gray-500 mt-1">
+                Disponible solo en el <strong>Plan Premium</strong>
+              </p>
+            </>
           )}
         </>
       )}
@@ -2552,6 +2967,126 @@ const MiNegocioPage = () => {
           ))
         )}
       </div>
+
+      {isEditOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+        >
+          <div className="w-full max-w-lg rounded-lg bg-white p-4 shadow-lg">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-lg font-semibold">Editar promoción</h3>
+              <button
+                onClick={closeEdit}
+                className="text-gray-500 hover:text-gray-800"
+                aria-label="Cerrar"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium">Título</label>
+                <Input
+                  value={promo.titulo || ""}
+                  onChange={(e) =>
+                    setPromo((prev) => ({ ...prev, titulo: e.target.value }))
+                  }
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium">Descripción</label>
+                <Textarea
+                  value={promo.descripcion || ""}
+                  onChange={(e) =>
+                    setPromo((prev) => ({
+                      ...prev,
+                      descripcion: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium">
+                    Fecha inicio
+                  </label>
+                  <Input
+                    type="date"
+                    value={promo.fecha_inicio || ""}
+                    onChange={(e) =>
+                      setPromo((prev) => ({
+                        ...prev,
+                        fecha_inicio: e.target.value,
+                      }))
+                    }
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium">Fecha fin</label>
+                  <Input
+                    type="date"
+                    value={promo.fecha_fin || ""}
+                    onChange={(e) =>
+                      setPromo((prev) => ({
+                        ...prev,
+                        fecha_fin: e.target.value,
+                      }))
+                    }
+                  />
+                </div>
+              </div>
+
+              {/* Imagen actual / carga nueva */}
+              <div className="space-y-2">
+                {previewImage && (
+                  <img
+                    src={previewImage}
+                    alt="Imagen de la promoción"
+                    className="w-full max-h-56 object-contain rounded border"
+                  />
+                )}
+                <div>
+                  <label className="block text-sm font-medium">
+                    Cambiar imagen (opcional)
+                  </label>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0] || null;
+                      setPromo((prev) => ({ ...prev, imagen_file: file }));
+                      if (file) {
+                        const url = URL.createObjectURL(file);
+                        setPreviewImage(url);
+                      }
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 flex justify-end gap-2">
+              <Button variant="outline" onClick={closeEdit}>
+                Cancelar
+              </Button>
+              <Button
+                onClick={actualizarPromocion}
+                disabled={isUpdatingPromotion}
+                className="bg-green-600 text-white hover:bg-green-700 disabled:opacity-60"
+              >
+                {isUpdatingPromotion
+                  ? promoSaveStep || "Guardando…"
+                  : "Guardar cambios"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Extras UI */}
       <h2 className="text-xl font-semibold text-gray-900 mt-8">

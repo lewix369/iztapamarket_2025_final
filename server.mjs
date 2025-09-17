@@ -38,6 +38,145 @@ const supabase =
 // Healthcheck rápido
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
+// ================================
+// Mercado Pago: crear preferencia (SERVER-SIDE)
+// ================================
+app.post("/api/create_preference", async (req, res) => {
+  try {
+    const {
+      title = "Plan Premium",
+      price = 199,
+      quantity = 1,
+      currency_id = "MXN",
+      external_reference,
+    } = req.body || {};
+
+    const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
+    const NOTIF_URL = process.env.MP_WEBHOOK_URL; // debe ser público (ngrok o dominio prod)
+    const BACK_SUCCESS = process.env.REGISTRO_SUCCESS_URL;
+    const BACK_FAILURE = process.env.REGISTRO_FAILURE_URL;
+    const BACK_PENDING = process.env.REGISTRO_PENDING_URL;
+
+    if (!MP_ACCESS_TOKEN) {
+      return res
+        .status(500)
+        .json({ error: "MP_ACCESS_TOKEN ausente en el backend" });
+    }
+
+    // Node 18+ tiene fetch global
+    const mpResp = await fetch(
+      "https://api.mercadopago.com/checkout/preferences",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${MP_ACCESS_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          items: [
+            {
+              title,
+              unit_price: Number(price),
+              quantity: Number(quantity),
+              currency_id,
+            },
+          ],
+          back_urls: {
+            success: BACK_SUCCESS,
+            failure: BACK_FAILURE,
+            pending: BACK_PENDING,
+          },
+          notification_url: NOTIF_URL,
+          external_reference: external_reference || undefined,
+          auto_return: "approved",
+        }),
+      }
+    );
+
+    const data = await mpResp.json();
+    if (!mpResp.ok) {
+      console.error("[MP create_preference] Error:", data);
+      return res.status(502).json({
+        error: "Mercado Pago no aceptó la preferencia",
+        details: data,
+      });
+    }
+
+    // Devuelve la preferencia al frontend
+    return res.status(200).json(data);
+  } catch (err) {
+    console.error("[/api/create_preference] Exception:", err?.message || err);
+    return res.status(500).json({ error: "Fallo al crear preferencia" });
+  }
+});
+
+// Soporte GET para evitar 404 al verificar el endpoint públicamente
+app.get("/webhook_mp", (_req, res) => res.status(200).send("OK"));
+
+// ================================
+// Mercado Pago: Webhook de notificaciones
+// ================================
+// IMPORTANTE: MP llamará a esta ruta desde internet. Debe coincidir con MP_WEBHOOK_URL
+app.post("/webhook_mp", express.json(), async (req, res) => {
+  try {
+    // Acepta de inmediato para evitar reintentos agresivos
+    res.sendStatus(200);
+
+    const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
+    if (!MP_ACCESS_TOKEN) {
+      console.warn("[webhook_mp] MP_ACCESS_TOKEN ausente");
+      return;
+    }
+
+    // MP puede enviar distintos formatos; intentamos extraer el ID del pago
+    const body = req.body || {};
+    const paymentId =
+      body?.data?.id ||
+      req.query?.id ||
+      (body?.resource &&
+        (String(body.resource).match(/\/v1\/payments\/(\d+)/) || [])[1]) ||
+      null;
+
+    console.log("[webhook_mp] payload:", JSON.stringify(body));
+
+    if (!paymentId) {
+      console.warn("[webhook_mp] sin paymentId en payload/query");
+      return;
+    }
+
+    // Consulta del pago para verificar estado real
+    const detResp = await fetch(
+      `https://api.mercadopago.com/v1/payments/${paymentId}`,
+      {
+        headers: {
+          Authorization: `Bearer ${MP_ACCESS_TOKEN}`,
+          Accept: "application/json",
+        },
+      }
+    );
+
+    const det = await detResp.json();
+    if (!detResp.ok) {
+      console.error("[webhook_mp] detalle pago error:", det);
+      return;
+    }
+
+    console.log("[webhook_mp] detalle:", {
+      id: det.id,
+      status: det.status,
+      status_detail: det.status_detail,
+      external_reference: det.external_reference,
+    });
+
+    // TODO: idempotencia: verificar si ya procesamos este paymentId en DB
+    // TODO: actualizar tu orden/suscripción en Supabase según 'det.status'
+    // if (det.status === "approved") { ... }
+  } catch (err) {
+    console.error("[webhook_mp] exception:", err?.message || err);
+    // No relanzamos error al cliente porque ya respondimos 200 arriba
+  }
+});
+
 app.get("/api/sitemap", async (req, res) => {
   try {
     // Base URL dinámica (respeta proxies / prod)

@@ -27,13 +27,34 @@ import { getFeaturedBusinesses } from "@/lib/database";
 
 // Elige la mejor imagen disponible para mostrar (evita que no salgan los destacados)
 const pickImage = (b) =>
+  b?.portada_url ||
   b?.imagen_url ||
   b?.cover_image_url ||
-  b?.portada_url ||
   b?.business_cover_url ||
   b?.logo_url ||
   b?.image_url ||
   null;
+
+// Estilos del CTA "Ver más" según el plan del negocio
+const getCtaClass = (plan) => {
+  const p = (plan || "").toLowerCase().trim();
+  if (p === "premium") return "bg-orange-500 hover:bg-orange-600";
+  if (p === "profesional" || p === "professional")
+    return "bg-blue-600 hover:bg-blue-700";
+  return "bg-gray-700 hover:bg-gray-800";
+};
+
+// Normaliza y construye enlace de WhatsApp si el negocio lo tiene
+const normalizeWhatsapp = (wa) => {
+  if (!wa) return "";
+  const s = String(wa).trim();
+  if (s.startsWith("http")) {
+    const m = s.match(/wa\.me\/(\d+)/);
+    return m ? `https://wa.me/${m[1]}` : s;
+  }
+  const digits = s.replace(/[^0-9]/g, "");
+  return digits ? `https://wa.me/${digits}` : "";
+};
 
 const HomePage = () => {
   const { supabase } = useSupabase();
@@ -94,7 +115,7 @@ const HomePage = () => {
             >
               <div className="space-y-4">
                 <Badge className="bg-orange-500 text-white px-4 py-2 text-sm font-semibold">
-                  🏆 #1 en Iztapa
+                  🏆 #1 Directorio Local en Iztapalapa
                 </Badge>
                 <h1 className="text-4xl md:text-6xl font-bold leading-tight">
                   Todo lo que buscas está en{" "}
@@ -226,26 +247,78 @@ const HomePage = () => {
               featuredBusinesses.map((b) => (
                 <Card key={b.slug}>
                   <CardHeader>
-                    <img
-                      src={pickImage(b) || "/placeholder-card.png"}
-                      alt={b.nombre}
-                      className="w-full h-40 object-cover rounded-md"
-                      onError={(e) => {
-                        e.currentTarget.onerror = null;
-                        e.currentTarget.src =
-                          "https://raw.githubusercontent.com/lewix369/iztapamarket_directorio_2025/main/public/iztapamarket%20cover.png";
-                      }}
-                    />
+                    <div className="relative">
+                      <img
+                        src={pickImage(b) || "/placeholder-card.png"}
+                        alt={b.nombre}
+                        className="w-full h-40 object-cover rounded-md"
+                        loading="lazy"
+                        onError={(e) => {
+                          e.currentTarget.onerror = null;
+                          e.currentTarget.src =
+                            "https://raw.githubusercontent.com/lewix369/iztapamarket_directorio_2025/main/public/iztapamarket%20cover.png";
+                        }}
+                      />
+                      {/* Badge Premium sobre la portada */}
+                      {String(b.plan_type).toLowerCase() === "premium" && (
+                        <div className="absolute left-2 top-2 flex items-center gap-1 rounded-full bg-black/55 backdrop-blur px-2 py-1 shadow-sm ring-1 ring-white/10">
+                          {[0, 1, 2, 3, 4].map((i) => (
+                            <Star
+                              key={i}
+                              aria-hidden="true"
+                              className="w-4 h-4 text-yellow-400 fill-yellow-400"
+                            />
+                          ))}
+                          <span className="ml-1 text-[11px] text-white/90 font-semibold">
+                            Premium
+                          </span>
+                        </div>
+                      )}
+                    </div>
                   </CardHeader>
                   <CardContent>
-                    <CardTitle>{b.nombre}</CardTitle>
-                    <CardDescription>{b.descripcion}</CardDescription>
-                    <Link
-                      to={`/negocio/${b.slug}`}
-                      className="text-blue-600 mt-2 inline-block"
-                    >
-                      Ver más
-                    </Link>
+                    {/* Título */}
+                    <CardTitle className="text-center">{b.nombre}</CardTitle>
+
+                    {/* Descripción */}
+                    <CardDescription className="mt-2 text-sm text-gray-600 line-clamp-4 text-justify">
+                      {b.descripcion}
+                    </CardDescription>
+
+                    {/* Acciones */}
+                    <div className="mt-4 flex items-center justify-center gap-2">
+                      {normalizeWhatsapp(b.whatsapp) &&
+                        ["premium", "profesional", "professional"].includes(
+                          String(b.plan_type || "")
+                            .toLowerCase()
+                            .trim()
+                        ) && (
+                          <Button
+                            asChild
+                            size="sm"
+                            className="h-9 px-4 text-sm rounded-md bg-[#25D366] hover:bg-[#1ebe5d] text-white font-semibold shadow min-w-[92px]"
+                            title="Contactar por WhatsApp"
+                          >
+                            <a
+                              href={normalizeWhatsapp(b.whatsapp)}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              WhatsApp
+                            </a>
+                          </Button>
+                        )}
+                      <Button
+                        asChild
+                        size="sm"
+                        className={`h-9 px-4 text-sm rounded-md ${getCtaClass(
+                          b.plan_type
+                        )} text-white font-semibold shadow min-w-[92px]`}
+                        title="Ver más detalles"
+                      >
+                        <Link to={`/negocio/${b.slug}`}>Ver más</Link>
+                      </Button>
+                    </div>
                   </CardContent>
                 </Card>
               ))

@@ -30,9 +30,9 @@ import { supabase } from "@/lib/supabaseClient";
 
 // ---------- util imágenes ----------
 const pickImage = (b) =>
+  b?.portada_url ||
   b?.imagen_url ||
   b?.cover_image_url ||
-  b?.portada_url ||
   b?.business_cover_url ||
   b?.logo_url ||
   b?.image_url ||
@@ -89,6 +89,7 @@ const BusinessListPage = () => {
   const [sortMode, setSortMode] = useState(
     locationQuery.get("sort") || "default"
   ); // "default" | "nearby"
+  const [isLocating, setIsLocating] = useState(false); // NUEVO
 
   const planOptions = useMemo(
     () => [
@@ -100,8 +101,9 @@ const BusinessListPage = () => {
     []
   );
 
+  // Convierte a string seguro antes de normalizar (evita fallos cuando viene null/undefined)
   const labelize = (s) =>
-    s
+    String(s ?? "")
       .normalize("NFD")
       .replace(/[\u0300-\u036f]/g, "")
       .replace(/-/g, " ")
@@ -226,19 +228,28 @@ const BusinessListPage = () => {
     setUserLoc(null);
   };
 
-  const enableNearby = () => {
+  // Toggle cercanía con estado de “Ubicando…”
+  const toggleNearby = () => {
+    if (sortMode === "nearby") {
+      setSortMode("default");
+      setUserLoc(null);
+      return;
+    }
     if (!("geolocation" in navigator)) {
       alert("Tu navegador no permite geolocalización.");
       return;
     }
+    setIsLocating(true);
     navigator.geolocation.getCurrentPosition(
       ({ coords }) => {
         setUserLoc({ lat: coords.latitude, lng: coords.longitude });
         setSortMode("nearby");
+        setIsLocating(false);
       },
       (err) => {
         console.error("Geoloc error:", err);
         alert("No se pudo obtener tu ubicación.");
+        setIsLocating(false);
       },
       { enableHighAccuracy: true, timeout: 10000 }
     );
@@ -320,7 +331,7 @@ const BusinessListPage = () => {
               </Button>
             </form>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-end auto-rows-min">
               <div>
                 <label
                   htmlFor="category-filter"
@@ -384,23 +395,41 @@ const BusinessListPage = () => {
                 </Button>
               </div>
 
-              <div className="flex items-center justify-end gap-2 col-span-1 md:col-span-2 lg:col-span-1">
+              <div className="col-span-1 md:col-span-2 lg:col-span-1 flex flex-wrap items-center gap-2 justify-between md:justify-end w-full">
                 <Button
                   type="button"
-                  onClick={enableNearby}
-                  className={`h-10 px-3 ${
+                  onClick={toggleNearby}
+                  aria-pressed={sortMode === "nearby"}
+                  disabled={isLocating}
+                  className={`h-10 px-3 whitespace-nowrap min-w-[140px] ${
                     sortMode === "nearby"
                       ? "bg-orange-600 hover:bg-orange-700 text-white"
                       : "bg-orange-500 hover:bg-orange-600 text-white"
                   }`}
                   title="Ordenar por negocios cercanos"
                 >
-                  Cerca de mí
+                  <span className="inline-flex items-center gap-2">
+                    {isLocating ? "Ubicando…" : "Cerca de mí"}
+                    {sortMode === "nearby" && userLoc && !isLocating && (
+                      <span
+                        className="inline-flex items-center gap-1 rounded-full bg-white/20 px-2 py-0.5 text-xs"
+                        aria-live="polite"
+                      >
+                        <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+                        ON
+                      </span>
+                    )}
+                  </span>
                 </Button>
-                <span className="text-sm text-gray-600 whitespace-nowrap">
-                  {businessesForView.length} resultados
-                </span>
-                <div className="flex border rounded-lg">
+                <div className="flex items-center gap-2 text-sm text-gray-600 whitespace-nowrap min-w-[140px]">
+                  <span>{businessesForView.length} resultados</span>
+                  {sortMode === "nearby" && userLoc && !isLocating && (
+                    <span className="inline-flex items-center gap-1 text-green-700">
+                      • <span>Ordenado por cercanía</span>
+                    </span>
+                  )}
+                </div>
+                <div className="flex border rounded-lg shrink-0">
                   <Button
                     variant={viewMode === "grid" ? "default" : "ghost"}
                     size="sm"
@@ -485,9 +514,16 @@ const BusinessListPage = () => {
                         <div className="absolute top-4 left-4">
                           <Badge
                             variant={
-                              business.plan_type === "premium"
+                              String(business.plan_type).toLowerCase() ===
+                              "premium"
                                 ? "orange"
-                                : business.plan_type === "pro"
+                                : [
+                                    "pro",
+                                    "profesional",
+                                    "professional",
+                                  ].includes(
+                                    String(business.plan_type).toLowerCase()
+                                  )
                                 ? "blue"
                                 : "secondary"
                             }
@@ -508,7 +544,7 @@ const BusinessListPage = () => {
                           {business.nombre}
                         </CardTitle>
                         <CardDescription className="text-orange-600 font-medium">
-                          {business.categoria}
+                          {labelize(business.categoria)}
                         </CardDescription>
                       </CardHeader>
                       <CardContent>
@@ -569,9 +605,16 @@ const BusinessListPage = () => {
                           <div className="absolute top-4 left-4">
                             <Badge
                               variant={
-                                business.plan_type === "premium"
+                                String(business.plan_type).toLowerCase() ===
+                                "premium"
                                   ? "orange"
-                                  : business.plan_type === "pro"
+                                  : [
+                                      "pro",
+                                      "profesional",
+                                      "professional",
+                                    ].includes(
+                                      String(business.plan_type).toLowerCase()
+                                    )
                                   ? "blue"
                                   : "secondary"
                               }
@@ -587,7 +630,7 @@ const BusinessListPage = () => {
                                 {business.nombre}
                               </h3>
                               <p className="text-orange-600 font-medium">
-                                {business.categoria}
+                                {labelize(business.categoria)}
                               </p>
                             </div>
                             <div className="flex items-center space-x-1 bg-yellow-50 px-3 py-1 rounded-full">

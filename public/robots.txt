@@ -3,4 +3,3 @@ Allow: /
 Disallow: /admin
 
 Sitemap: https://iztapamarket.com/api/sitemap
-Host: iztapamarket.com

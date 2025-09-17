@@ -5,42 +5,35 @@ import { supabase } from "@/lib/supabaseClient";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import PromoCard from "@/components/PromoCard";
+import { useToast } from "@/components/ui/use-toast";
+import { Toaster } from "@/components/ui/toaster";
+import { FaInstagram, FaFacebook, FaGlobe } from "react-icons/fa";
+import { FaTiktok } from "react-icons/fa6";
+import TransportButtons from "@/components/TransportButtons";
 
-// Optimiza imágenes de Supabase Storage sin romper URLs que no son de Supabase
-const optimizeImage = (
-  url,
-  { width, height, quality = 70, format = "webp" } = {}
-) => {
-  try {
-    if (!url) return url;
-    const u = new URL(url);
-    // Solo aplica a URLs de Supabase Storage públicas
-    const match = u.pathname.match(/\/storage\/v1\/object\/public\/(.+)$/);
-    if (!match) return url;
-    const origin = `${u.protocol}//${u.host}`;
-    const path = match[1]; // bucket/path/filename
-    const params = new URLSearchParams();
-    if (width) params.set("width", String(width));
-    if (height) params.set("height", String(height));
-    params.set("quality", String(quality));
-    params.set("format", format);
-    return `${origin}/storage/v1/render/image/public/${path}?${params.toString()}`;
-  } catch (e) {
-    return url;
-  }
+/* ---------------------- Optimización de imágenes ---------------------- */
+/** Devuelve la URL tal cual, sin transformaciones que rompan en local o en Supabase */
+const optimizeImage = (url) => {
+  if (!url || typeof url !== "string") return url;
+  return url;
 };
 
-// Convierte un path de Supabase Storage a URL pública; autodetecta el bucket si el path lo incluye
+/* -------------------- Resolución de URL pública Storage -------------------- */
+/** Convierte un path de Storage a URL pública. Si ya es URL completa, la regresa. */
 const resolvePublicUrl = (pathOrUrl) => {
   if (!pathOrUrl) return null;
-  // Si ya es URL completa, devuélvela tal cual
+  if (typeof pathOrUrl !== "string") return null;
+
+  // Si ya es URL absoluta, devolver tal cual
   if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
+
   try {
-    const clean = String(pathOrUrl).replace(/^\/+/, "");
+    const clean = pathOrUrl.replace(/^\/+/, "");
     const [maybeBucket, ...rest] = clean.split("/");
     const hasBucket = rest.length > 0;
     const filePath = hasBucket ? rest.join("/") : clean;
-    // Buckets candidatos: si el path ya trae bucket, pruébalo primero
+
+    // Si el path tiene bucket explícito, probamos ese bucket
     const bucketsToTry = hasBucket
       ? [maybeBucket]
       : [
@@ -51,6 +44,7 @@ const resolvePublicUrl = (pathOrUrl) => {
           "gallery",
           "business_assets",
         ];
+
     for (const bucket of bucketsToTry) {
       const { data } = supabase.storage.from(bucket).getPublicUrl(filePath);
       if (data?.publicUrl) return data.publicUrl;
@@ -61,51 +55,392 @@ const resolvePublicUrl = (pathOrUrl) => {
   }
 };
 
+/* ---------------------- Galería Premium con Lightbox ---------------------- */
+const LightboxGallery = ({ images = [], title = "Galería" }) => {
+  const [open, setOpen] = React.useState(false);
+  const [index, setIndex] = React.useState(0);
+
+  if (!Array.isArray(images) || images.length === 0) return null;
+
+  const openAt = (i) => {
+    setIndex(i);
+    setOpen(true);
+  };
+  const close = () => setOpen(false);
+  const prev = (e) => {
+    e?.stopPropagation?.();
+    setIndex((i) => (i - 1 + images.length) % images.length);
+  };
+  const next = (e) => {
+    e?.stopPropagation?.();
+    setIndex((i) => (i + 1) % images.length);
+  };
+
+  React.useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => {
+      if (e.key === "Escape") close();
+      if (e.key === "ArrowLeft") prev();
+      if (e.key === "ArrowRight") next();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+
+  React.useEffect(() => {
+    // Lock body scroll when lightbox is open (and avoid layout shift)
+    if (!open) return;
+
+    const body = document.body;
+    const prevOverflow = body.style.overflow;
+    const prevPaddingRight = body.style.paddingRight;
+
+    // Width of the scrollbar to avoid layout shift when hiding it
+    const scrollbar = window.innerWidth - document.documentElement.clientWidth;
+
+    body.style.overflow = "hidden";
+    if (scrollbar > 0) {
+      body.style.paddingRight = `${scrollbar}px`;
+    }
+
+    // Optional: block touch scroll on mobile (iOS/Android)
+    const stopScroll = (e) => e.preventDefault();
+    window.addEventListener("touchmove", stopScroll, { passive: false });
+    window.addEventListener("wheel", stopScroll, { passive: false });
+
+    return () => {
+      body.style.overflow = prevOverflow;
+      body.style.paddingRight = prevPaddingRight;
+      window.removeEventListener("touchmove", stopScroll);
+      window.removeEventListener("wheel", stopScroll);
+    };
+  }, [open]);
+
+  return (
+    <section className="mt-6">
+      {/* Thumbnails */}
+      {/* Mobile: carrusel horizontal 1x con snap */}
+      <div className="md:hidden mb-6 -mx-4 px-4">
+        <div className="flex gap-3 overflow-x-auto snap-x snap-mandatory scroll-smooth pb-1">
+          {images.map((imgUrl, i) => {
+            const resolved = resolvePublicUrl(imgUrl) || imgUrl;
+            const thumb = optimizeImage(resolved);
+            return (
+              <button
+                key={i}
+                type="button"
+                onClick={() => openAt(i)}
+                className="snap-center shrink-0 w-full max-w-[88%] sm:max-w-[85%] relative focus:outline-none"
+                aria-label={`Abrir imagen ${i + 1} de ${images.length}`}
+              >
+                <img
+                  src={thumb}
+                  alt={`Foto ${i + 1} de ${title}`}
+                  className="w-full h-60 object-cover rounded-2xl shadow-md cursor-pointer object-center galeria-img"
+                  width="800"
+                  height="600"
+                  loading={i < 2 ? "eager" : "lazy"}
+                  fetchpriority={i === 0 ? "high" : "auto"}
+                  decoding="async"
+                  onError={(e) => (e.currentTarget.style.display = "none")}
+                />
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Desktop/Tablet: grid de miniaturas como antes */}
+      <div className="hidden md:grid md:grid-cols-3 gap-4 mb-6">
+        {images.map((imgUrl, i) => {
+          const resolved = resolvePublicUrl(imgUrl) || imgUrl;
+          const thumb = optimizeImage(resolved);
+          return (
+            <button
+              key={i}
+              type="button"
+              onClick={() => openAt(i)}
+              className="group relative block focus:outline-none"
+              aria-label={`Abrir imagen ${i + 1} de ${images.length}`}
+            >
+              <img
+                src={thumb}
+                alt={`Foto ${i + 1} de ${title}`}
+                className="w-full h-40 object-cover rounded-lg galeria-img"
+                width="640"
+                height="360"
+                loading={i < 2 ? "eager" : "lazy"}
+                fetchpriority={i === 0 ? "high" : "auto"}
+                decoding="async"
+                onError={(e) => (e.currentTarget.style.display = "none")}
+              />
+              <span className="absolute inset-0 rounded-lg ring-0 group-hover:ring-4 ring-white/70 transition" />
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Lightbox */}
+      {open && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center"
+          onClick={close}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Visor de imágenes"
+        >
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              close();
+            }}
+            className="absolute top-4 right-4 md:top-6 md:right-6 text-white/90 hover:text-white text-2xl"
+            aria-label="Cerrar"
+          >
+            ✕
+          </button>
+
+          <button
+            type="button"
+            onClick={prev}
+            className="absolute left-4 md:left-6 top-1/2 -translate-y-1/2 text-white text-3xl select-none p-4 md:p-3 bg-black/40 rounded-full hover:bg-black/60"
+            aria-label="Anterior"
+          >
+            ‹
+          </button>
+
+          <figure
+            className="max-w-[95vw] max-h-[85vh] px-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {(() => {
+              const resolved = resolvePublicUrl(images[index]) || images[index];
+              const big = optimizeImage(resolved);
+              return (
+                <img
+                  src={big}
+                  alt={`Imagen ${index + 1} de ${title}`}
+                  className="w-auto h-auto max-h-[85vh] max-w-[92vw] rounded-2xl shadow-lg object-contain aspect-[16/9]"
+                  width="1600"
+                  height="900"
+                  loading="eager"
+                  decoding="async"
+                />
+              );
+            })()}
+            <figcaption className="mt-3 text-center text-white/80 text-sm">
+              {index + 1} / {images.length}
+            </figcaption>
+          </figure>
+
+          <button
+            type="button"
+            onClick={next}
+            className="absolute right-4 md:right-6 top-1/2 -translate-y-1/2 text-white text-3xl select-none p-4 md:p-3 bg-black/40 rounded-full hover:bg-black/60"
+            aria-label="Siguiente"
+          >
+            ›
+          </button>
+        </div>
+      )}
+    </section>
+  );
+};
+
+/* --------------------------- Carrusel de Promos --------------------------- */
+const PromoCarousel = ({ promos = [] }) => {
+  const listRef = React.useRef(null);
+
+  if (!Array.isArray(promos) || promos.length < 2) return null;
+
+  const scrollByAmount = (dir = 1) => {
+    const el = listRef.current;
+    if (!el) return;
+    const first = el.querySelector("[data-slide]");
+    const step = first ? first.clientWidth + 16 : el.clientWidth * 0.9;
+    el.scrollBy({ left: dir * step, behavior: "smooth" });
+  };
+
+  return (
+    <section className="mt-10 relative">
+      <h2 className="text-xl font-bold mt-10 mb-2 text-red-600">
+        🎉 Promociones activas
+      </h2>
+
+      <div className="relative">
+        {/* Botones */}
+        <div className="flex justify-end gap-2 mb-2">
+          <button
+            type="button"
+            onClick={() => scrollByAmount(-1)}
+            className="rounded-full border px-3 py-1 text-sm hover:bg-gray-50"
+            aria-label="Promos anterior"
+          >
+            ‹
+          </button>
+          <button
+            type="button"
+            onClick={() => scrollByAmount(1)}
+            className="rounded-full border px-3 py-1 text-sm hover:bg-gray-50"
+            aria-label="Promos siguiente"
+          >
+            ›
+          </button>
+        </div>
+
+        {/* Lista horizontal con snap */}
+        <div
+          ref={listRef}
+          className="flex gap-4 overflow-x-auto snap-x snap-mandatory scroll-smooth pb-2"
+        >
+          {promos.map((promo) => (
+            <div
+              key={promo.id}
+              data-slide
+              className="snap-start shrink-0 w-[280px] sm:w-[320px]"
+            >
+              <PromoCard promo={promo} contexto="detalle" />
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+};
+
+/* --------------------------- Página de negocio --------------------------- */
 const BusinessDetailPage = () => {
   const { slug } = useParams();
   const [business, setBusiness] = useState(null);
   const [loading, setLoading] = useState(true);
   const [plan, setPlan] = useState(null);
-  if (!plan) {
-    console.warn(
-      "⚠️ Plan no definido aún. Ocultando contenido condicional temporalmente."
-    );
-  }
   const [showPromo, setShowPromo] = useState(false);
   const [promociones, setPromociones] = useState([]);
 
+  const { toast } = useToast();
+
+  // === Reemplazo suave de window.alert por toast (solo mientras esta página está montada)
+  const originalAlertRef = React.useRef(window.alert);
+  useEffect(() => {
+    const alertAsToast = (message) => {
+      if (typeof message === "string") {
+        toast({ title: message, duration: 2500 });
+      } else {
+        toast({ title: "Aviso", description: String(message), duration: 2500 });
+      }
+    };
+
+    // Sustituir alert por toast localmente
+    window.alert = alertAsToast;
+
+    // Restaurar al salir de la página
+    return () => {
+      window.alert = originalAlertRef.current;
+    };
+  }, [toast]);
+
+  // Detecta móvil vs escritorio
+  const isMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(
+    navigator.userAgent || ""
+  );
+
+  // En desktop: copiar al portapapeles en lugar de abrir FaceTime
+  const handleCallClick = (e) => {
+    if (isMobile) return; // en móvil, dejamos que el enlace `tel:` abra el marcador
+    e.preventDefault();
+    const tel = business?.telefono || "";
+    if (!tel) return;
+    navigator.clipboard
+      .writeText(tel)
+      .then(() => {
+        toast({
+          title: "Número copiado",
+          description: "Se copió al portapapeles.",
+          duration: 2000,
+        });
+      })
+      .catch(() => {
+        toast({
+          title: "No se pudo copiar",
+          description: "Copia el número manualmente: " + tel,
+          variant: "destructive",
+        });
+      });
+  };
+
   useEffect(() => {
     const fetchBusiness = async () => {
-      // Solo mostrar negocios PUBLICOS: aprobados y no eliminados
       console.log("📥 Cargando negocio con slug:", slug);
       const { data, error } = await supabase
         .from("negocios")
         .select("*")
         .eq("slug", slug)
-        .eq("is_deleted", false) // ocultar eliminados
-        .eq("is_approved", true) // mostrar solo aprobados
+        .eq("is_deleted", false)
+        .eq("is_approved", true)
         .maybeSingle();
-
-      console.log("🔎 Resultado:", data);
 
       if (error) {
         console.error("❌ Error al obtener el negocio:", error.message);
+        setBusiness(null);
       } else if (!data) {
         console.warn("⚠️ Negocio no encontrado para slug:", slug);
         setBusiness(null);
       } else {
-        // Normaliza plan a minúsculas SIN renombrar ("profesional" se queda como "profesional") y garantiza que gallery_images sea un arreglo
-        const normalizedPlan = (data?.plan_type || "").toLowerCase().trim();
+        // Normaliza plan
+        let normalizedPlan = (data?.plan_type || "").toLowerCase().trim();
+        if (normalizedPlan === "pro") normalizedPlan = "profesional";
 
+        // Normaliza galería (acepta string[], {publicUrl|url|path}[])
         const galleryField = data?.gallery_images;
-        const normalizedGallery = Array.isArray(galleryField)
-          ? galleryField
-          : typeof galleryField === "string"
-          ? galleryField
+        let normalizedGallery = [];
+
+        if (Array.isArray(galleryField)) {
+          normalizedGallery = galleryField
+            .map((g) => {
+              if (typeof g === "string") return g;
+              if (g && typeof g === "object") {
+                if (g.publicUrl) return g.publicUrl;
+                if (g.url) return g.url;
+                if (g.path) {
+                  const { data: pub } = supabase.storage
+                    .from("negocios")
+                    .getPublicUrl(g.path);
+                  return pub?.publicUrl || g.path;
+                }
+              }
+              return null;
+            })
+            .filter(Boolean);
+        } else if (typeof galleryField === "string") {
+          const trimmed = galleryField.trim();
+          if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+            try {
+              const parsed = JSON.parse(trimmed);
+              if (Array.isArray(parsed)) {
+                normalizedGallery = parsed
+                  .map((g) => {
+                    if (typeof g === "string") return g;
+                    if (g && typeof g === "object") {
+                      return g.publicUrl || g.url || g.path || null;
+                    }
+                    return null;
+                  })
+                  .filter(Boolean);
+              }
+            } catch {
+              normalizedGallery = trimmed
+                .split(",")
+                .map((s) => s.trim())
+                .filter(Boolean);
+            }
+          } else {
+            normalizedGallery = trimmed
               .split(",")
               .map((s) => s.trim())
-              .filter(Boolean)
-          : [];
+              .filter(Boolean);
+          }
+        }
 
         setBusiness({
           ...data,
@@ -114,7 +449,6 @@ const BusinessDetailPage = () => {
           video_embed_url: data.video_embed_url || data.video || "",
         });
         setPlan(normalizedPlan);
-        console.log("📦 Datos recibidos del negocio:", data);
       }
 
       setLoading(false);
@@ -122,24 +456,21 @@ const BusinessDetailPage = () => {
     if (slug) fetchBusiness();
   }, [slug]);
 
-  // Promociones activas (solo cuando el negocio aprobado está cargado)
+  // Promociones
   useEffect(() => {
     const fetchPromociones = async () => {
       if (!business?.id) return;
-
-      const { data: promocionesData, error: promocionesError } = await supabase
+      const { data: promocionesData, error } = await supabase
         .from("promociones")
         .select("*")
         .eq("negocio_id", business.id);
 
-      if (promocionesError) {
-        console.error("❌ Error cargando promociones:", promocionesError);
+      if (error) {
+        console.error("❌ Error cargando promociones:", error);
         return;
       }
-
       setPromociones(promocionesData || []);
     };
-
     fetchPromociones();
   }, [business?.id]);
 
@@ -152,13 +483,6 @@ const BusinessDetailPage = () => {
     : promociones
     ? [promociones]
     : [];
-
-  const formatDate = (date) =>
-    new Date(date).toLocaleDateString("es-MX", {
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-    });
 
   if (loading) {
     return (
@@ -180,8 +504,7 @@ const BusinessDetailPage = () => {
   const formatWhatsAppLink = (whatsapp) => {
     if (!whatsapp) return null;
     const raw = whatsapp.trim();
-    const isFullURL = raw.startsWith("http");
-    if (isFullURL) {
+    if (raw.startsWith("http")) {
       const match = raw.match(/wa\.me\/(\d+)/);
       return match ? `https://wa.me/${match[1]}` : raw;
     }
@@ -189,7 +512,6 @@ const BusinessDetailPage = () => {
     return `https://wa.me/${cleaned}`;
   };
 
-  // Helpers visuales
   const prettyCategory = (cat) => {
     if (!cat || typeof cat !== "string") return cat || "";
     return cat
@@ -198,7 +520,6 @@ const BusinessDetailPage = () => {
       .join(" ");
   };
 
-  // Extraer ID de YouTube para el embed del video
   const extractYouTubeId = (url) => {
     const match = (url || "").match(
       /(?:youtube\.com\/(?:watch\?v=|embed\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/
@@ -206,11 +527,260 @@ const BusinessDetailPage = () => {
     return match ? match[1] : "";
   };
 
-  // ---------- Lógica para mostrar Menú (ya implementada) ----------
+  // ---- Normalizador de texto SOLO para este negocio ----
+  const prettyService = (txt) => {
+    if (!txt || typeof txt !== "string") return txt;
+    let s = txt.trim();
+
+    // Reemplazos rápidos de caracteres/separadores comunes
+    s = s.replace(/[_\-]+/g, " "); // underscores y guiones a espacios
+    s = s.replace(/\s{2,}/g, " "); // espacios repetidos
+
+    // Correcciones de acentos/errores frecuentes
+    s = s.replace(/\bcampanas\b/gi, "campañas");
+    s = s.replace(/\bdiseno\b/gi, "diseño");
+    s = s.replace(/\bvideo marketing\b/gi, "video marketing");
+    s = s.replace(/\bautomatizaciones ia\b/gi, "automatizaciones IA");
+    s = s.replace(/\bia\b/gi, "IA"); // asegurar IA en mayúsculas
+    s = s.replace(/\bseo\b/gi, "SEO"); // si aparece
+
+    // Title Case básico
+    s = s
+      .toLowerCase()
+      .split(" ")
+      .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : ""))
+      .join(" ");
+
+    // Mantener acrónimos en mayúsculas
+    s = s.replace(/\bIa\b/g, "IA").replace(/\bSeo\b/g, "SEO");
+
+    return s;
+  };
+
+  // Aplicar SOLO a este negocio (por slug)
+  const onlyPrettyThisBiz = business?.slug === "level-creative-lab";
+
+  /* ------------------------- Mapa y geolocalización ------------------------- */
+  // Normaliza posibles &amp; en URLs copiadas desde CMS
+  const decodeHtmlEntities = (str = "") =>
+    str.replaceAll("&amp;", "&").replaceAll("&quot;", '"').trim();
+
+  // Construye un src de mapa embebido sin API key.
+  // Prioridad: mapa_embed_url limpio → lat/lng → dirección.
+  const getMapEmbedSrc = (b) => {
+    if (!b) return null;
+
+    if (b.mapa_embed_url && typeof b.mapa_embed_url === "string") {
+      return decodeHtmlEntities(b.mapa_embed_url);
+    }
+
+    const lat = Number(b.lat ?? b.latitude);
+    const lng = Number(b.lng ?? b.longitude);
+    if (!Number.isNaN(lat) && !Number.isNaN(lng)) {
+      return `https://maps.google.com/maps?q=${lat},${lng}&z=15&output=embed`;
+    }
+
+    const addr =
+      b.direccion ||
+      b.address ||
+      `${b.nombre || ""} ${b.categoria || ""} Iztapalapa CDMX` ||
+      "";
+    if (addr) {
+      return `https://maps.google.com/maps?q=${encodeURIComponent(
+        addr
+      )}&z=15&output=embed`;
+    }
+
+    return null;
+  };
+
+  // Construye link "Cómo llegar" para abrir Google Maps
+  const getDirectionsUrl = (b) => {
+    if (!b) return null;
+    const lat = Number(b.lat ?? b.latitude);
+    const lng = Number(b.lng ?? b.longitude);
+    if (!Number.isNaN(lat) && !Number.isNaN(lng)) {
+      return `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`;
+    }
+    const addr = b.direccion || b.address || "";
+    if (addr) {
+      return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
+        addr
+      )}`;
+    }
+    return null;
+  };
+
+  // Bloque reutilizable de mapa (botón único con menú pro)
+  const MapBlock = ({ business }) => {
+    const { toast } = useToast();
+    const src = getMapEmbedSrc(business);
+    const directions = getDirectionsUrl(business);
+    if (!src) return null;
+
+    // Helpers para destinos
+    const getDestParts = (b) => {
+      if (!b) return { type: "query", value: "" };
+
+      // 1) Campos directos en DB
+      const lat = Number(b?.lat ?? b?.latitude);
+      const lng = Number(b?.lng ?? b?.longitude);
+      if (!Number.isNaN(lat) && !Number.isNaN(lng)) {
+        return { type: "latlng", value: `${lat},${lng}`, lat, lng };
+      }
+
+      // 2) Intentar extraer de mapa_embed_url si trae coordenadas en el parámetro q=
+      if (typeof b?.mapa_embed_url === "string") {
+        const cleaned = decodeHtmlEntities(b.mapa_embed_url);
+        // Ejemplos soportados:
+        // https://maps.google.com/maps?q=19.4326,-99.1332&z=15&output=embed
+        // https://www.google.com/maps?q=19.4326,-99.1332&...
+        let m = cleaned.match(/[?&]q=(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)/i);
+        if (!m) {
+          // Variante con @lat,lng en la URL
+          m = cleaned.match(/@(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)/i);
+        }
+        if (m) {
+          const plat = Number(m[1]);
+          const plng = Number(m[2]);
+          if (!Number.isNaN(plat) && !Number.isNaN(plng)) {
+            return {
+              type: "latlng",
+              value: `${plat},${plng}`,
+              lat: plat,
+              lng: plng,
+            };
+          }
+        }
+      }
+
+      // 3) Fallback a dirección textual
+      const addr = b?.direccion || b?.address || "";
+      return { type: "query", value: addr };
+    };
+
+    const dest = getDestParts(business);
+
+    const openGoogleWithGeo = () => {
+      if (!navigator?.geolocation) {
+        window.open(directions, "_blank", "noopener,noreferrer");
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const origin = `${pos.coords.latitude},${pos.coords.longitude}`;
+          const destParam =
+            dest.type === "latlng"
+              ? dest.value
+              : encodeURIComponent(dest.value);
+          const url = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destParam}`;
+          window.open(url, "_blank", "noopener,noreferrer");
+        },
+        () => {
+          // Fallback si el usuario deniega permisos o falla geolocalización
+          window.open(directions, "_blank", "noopener,noreferrer");
+        },
+        { enableHighAccuracy: true, timeout: 8000 }
+      );
+    };
+
+    return (
+      <section className="mt-6">
+        <div className="rounded-lg overflow-hidden border bg-white">
+          <iframe
+            src={src}
+            title="Ubicación del negocio"
+            className="w-full h-64 md:h-72"
+            loading="lazy"
+            referrerPolicy="no-referrer-when-downgrade"
+            allowFullScreen
+          />
+        </div>
+
+        {/* Botones de transporte reutilizables */}
+        {(() => {
+          const latProp = dest.type === "latlng" ? dest.lat : null;
+          const lngProp = dest.type === "latlng" ? dest.lng : null;
+          const addrProp = dest.type === "query" ? dest.value : "";
+
+          // En plan Free no mostramos botones de transporte
+          if (plan === "free") return null;
+
+          return (
+            <div className="mt-3">
+              <TransportButtons
+                lat={latProp}
+                lng={lngProp}
+                address={addrProp}
+                planType={plan}
+              />
+            </div>
+          );
+        })()}
+      </section>
+    );
+  };
+
+  // --- Bloque único de redes sociales (para evitar duplicados) ---
+  const SocialLinks = ({ b }) => {
+    if (!(b?.instagram || b?.facebook || b?.web || b?.tiktok)) return null;
+    return (
+      <div className="my-6 space-y-2">
+        <h3 className="text-xl font-semibold mb-2">Síguenos</h3>
+        <div className="flex flex-wrap gap-2">
+          {b.instagram && (
+            <a
+              href={b.instagram}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-2 bg-pink-600 text-white px-3 py-2 rounded-md hover:bg-pink-700 text-sm"
+            >
+              <FaInstagram className="w-4 h-4" />
+              Instagram
+            </a>
+          )}
+          {b.facebook && (
+            <a
+              href={b.facebook}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-2 bg-blue-700 text-white px-3 py-2 rounded-md hover:bg-blue-800 text-sm"
+            >
+              <FaFacebook className="w-4 h-4" />
+              Facebook
+            </a>
+          )}
+          {b.tiktok && (
+            <a
+              href={b.tiktok}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-2 bg-black text-white px-3 py-2 rounded-md hover:opacity-90 text-sm"
+            >
+              <FaTiktok className="w-4 h-4" />
+              TikTok
+            </a>
+          )}
+          {b.web && (
+            <a
+              href={b.web}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-2 bg-indigo-600 text-white px-3 py-2 rounded-md hover:bg-indigo-700 text-sm"
+            >
+              <FaGlobe className="w-4 h-4" />
+              Sitio web
+            </a>
+          )}
+        </div>
+      </div>
+    );
+  };
+  // ---------- Menú ----------
   const rawCat = (business?.slug_categoria || business?.categoria || "")
     .toLowerCase()
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, ""); // sin acentos
+    .replace(/[\u0300-\u036f]/g, "");
 
   const isFoodCategory =
     rawCat.includes("alimentos") ||
@@ -231,10 +801,10 @@ const BusinessDetailPage = () => {
   const renderMenuBlock = () => {
     if (!hasMenu) return null;
 
-    // Caso PDF/Google Drive
     if (looksLikeURL) {
       const isPDF = /\.pdf(\?|$)/i.test(menuStr);
       const isDrive = /drive\.google\.com/i.test(menuStr);
+
       const toDrivePreview = (url) => {
         const m1 = url.match(/drive\.google\.com\/file\/d\/([^/]+)/i);
         if (m1) return `https://drive.google.com/file/d/${m1[1]}/preview`;
@@ -242,15 +812,19 @@ const BusinessDetailPage = () => {
         if (m2) return `https://drive.google.com/file/d/${m2[1]}/preview`;
         return url;
       };
+
+      // 👇 Importante: usar '&' normal, NO '&amp;'
       const googleViewer = (url) =>
-        `https://drive.google.com/viewerng/viewer?embedded=1&amp;url=${encodeURIComponent(
+        `https://drive.google.com/viewerng/viewer?embedded=1&url=${encodeURIComponent(
           url
         )}`;
+
       const embedSrc = isDrive
         ? toDrivePreview(menuStr)
         : isPDF
         ? googleViewer(menuStr)
         : null;
+
       return (
         <section className="mt-10">
           <div className="bg-orange-50 border-l-4 border-orange-500 text-orange-900 p-4 rounded">
@@ -281,12 +855,14 @@ const BusinessDetailPage = () => {
         </section>
       );
     }
-    // Caso texto plano
+
+    // Texto plano
     const clean = (l = "") =>
       l
         .replace(/^[•\-\*\u2022]+\s*/g, "")
         .replace(/\s{2,}/g, " ")
         .trim();
+
     const isHeader = (line) => {
       if (!line) return false;
       const noPrice = !/\$\s?\d/.test(line);
@@ -297,6 +873,7 @@ const BusinessDetailPage = () => {
           line.length > 2);
       return noPrice && looksHeader;
     };
+
     const splitNamePrice = (line) => {
       const m = line.match(/\$\s?\d+(?:[.,]\d{2})?/g);
       if (!m) return { name: clean(line), price: "" };
@@ -305,12 +882,14 @@ const BusinessDetailPage = () => {
       const name = clean(line.slice(0, idx).replace(/[–—-]\s*$/, ""));
       return { name: name || clean(line), price: last.trim() };
     };
+
     const lines = menuStr
       .split(/\r?\n/)
       .map((l) => clean(l))
       .filter(Boolean);
     const sections = [];
     let current = { title: "Menú", items: [] };
+
     for (const line of lines) {
       if (isHeader(line)) {
         if (current.items.length || current.title !== "Menú")
@@ -323,6 +902,7 @@ const BusinessDetailPage = () => {
     }
     if (current.items.length || current.title !== "Menú")
       sections.push(current);
+
     return (
       <section className="mt-10">
         <div className="bg-orange-50 border-l-4 border-orange-500 text-orange-900 p-4 rounded">
@@ -362,10 +942,11 @@ const BusinessDetailPage = () => {
       </section>
     );
   };
-  const shouldShowMenu = plan === "premium" && isFoodCategory && hasMenu;
-  // ---------------------------------------------------------------
 
-  // URL segura para el logo (soporta path de Storage o URL completa)
+  const shouldShowMenu =
+    (plan === "premium" || plan === "profesional") && isFoodCategory && hasMenu;
+
+  // URL segura para el logo
   const logoSrc = resolvePublicUrl(business?.logo_url);
 
   return (
@@ -397,11 +978,7 @@ const BusinessDetailPage = () => {
         <meta
           property="og:image"
           content={optimizeImage(
-            resolvePublicUrl(business.logo_url) || business.imagen_url,
-            {
-              width: 1200,
-              quality: 70,
-            }
+            resolvePublicUrl(business.logo_url) || business.imagen_url
           )}
         />
         <meta property="og:type" content="business.business" />
@@ -427,11 +1004,7 @@ const BusinessDetailPage = () => {
         <meta
           name="twitter:image"
           content={optimizeImage(
-            resolvePublicUrl(business.logo_url) || business.imagen_url,
-            {
-              width: 1200,
-              quality: 70,
-            }
+            resolvePublicUrl(business.logo_url) || business.imagen_url
           )}
         />
         <script type="application/ld+json">
@@ -467,6 +1040,9 @@ const BusinessDetailPage = () => {
               src={logoSrc}
               alt={`Logo de ${business.nombre}`}
               className="h-24 md:h-28 lg:h-32 w-auto mb-4"
+              width="512"
+              height="512"
+              decoding="async"
               loading="lazy"
               onError={(e) => (e.currentTarget.style.display = "none")}
             />
@@ -494,7 +1070,10 @@ const BusinessDetailPage = () => {
         {showPromo && (
           <div className="w-full max-w-md mx-auto my-6">
             <img
-              src={business.promocion_imagen}
+              src={
+                resolvePublicUrl(business.promocion_imagen) ||
+                business.promocion_imagen
+              }
               alt=""
               className="w-full h-auto rounded-xl shadow-lg"
               onError={() => setShowPromo(false)}
@@ -511,12 +1090,35 @@ const BusinessDetailPage = () => {
         {business.portada_url && (
           <div className="mt-8 mb-6">
             <img
-              src={business.portada_url}
+              src={
+                resolvePublicUrl(business.portada_url) || business.portada_url
+              }
               alt="Portada del negocio"
-              className="w-full rounded-lg"
+              className="w-full rounded-lg object-cover max-h-[450px] md:max-h-[350px] sm:max-h-[260px]"
+              width="1600"
+              height="600"
+              loading="lazy"
+              decoding="async"
             />
           </div>
         )}
+
+        {/* Galería con Lightbox */}
+        {(() => {
+          const galleryLimit =
+            plan === "premium" ? 6 : plan === "profesional" ? 3 : 0;
+
+          return (
+            Array.isArray(business.gallery_images) &&
+            business.gallery_images.length > 0 &&
+            galleryLimit > 0 && (
+              <LightboxGallery
+                images={business.gallery_images.slice(0, galleryLimit)}
+                title={business.nombre}
+              />
+            )
+          );
+        })()}
 
         {/* Estadísticas */}
         {Number(business?.visitas) > 0 && (
@@ -529,21 +1131,8 @@ const BusinessDetailPage = () => {
         {/* Contenido por plan */}
         {plan === "premium" && (
           <>
-            {Array.isArray(business.gallery_images) &&
-              business.gallery_images.length > 0 && (
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">
-                  {business.gallery_images.slice(0, 10).map((imgUrl, index) => (
-                    <img
-                      key={index}
-                      src={optimizeImage(imgUrl, { width: 600, quality: 70 })}
-                      alt={`Foto ${index + 1} de ${business.nombre}`}
-                      className="w-full h-40 object-cover rounded-lg"
-                    />
-                  ))}
-                </div>
-              )}
-
             <div className="bg-green-50 border-l-4 border-green-500 text-green-800 p-4 rounded mb-4">
+              <h3 className="text-lg font-semibold mb-2">Información</h3>
               <p className="text-gray-700 pl-1 mb-2">
                 {business.descripcion ||
                   "Sin descripción disponible por el momento."}
@@ -556,10 +1145,17 @@ const BusinessDetailPage = () => {
               </p>
             </div>
 
-            <div className="flex flex-col gap-3 mt-4">
-              <Button asChild>
-                <a href={`tel:${business.telefono}`}>Llamar al negocio</a>
-              </Button>
+            <div className="flex flex-col sm:flex-row gap-3 mt-4">
+              {business.telefono && (
+                <Button asChild>
+                  <a
+                    href={`tel:${business.telefono}`}
+                    onClick={handleCallClick}
+                  >
+                    Llamar al negocio
+                  </a>
+                </Button>
+              )}
               {business.whatsapp && (
                 <Button
                   asChild
@@ -603,68 +1199,7 @@ const BusinessDetailPage = () => {
               </div>
             )}
 
-            {business.mapa_embed_url && (
-              <div className="mt-6">
-                <iframe
-                  src={business.mapa_embed_url}
-                  title="Ubicación del negocio"
-                  className="w-full h-64 rounded-lg border"
-                  allowFullScreen
-                  loading="lazy"
-                ></iframe>
-              </div>
-            )}
-
-            {(business.instagram ||
-              business.facebook ||
-              business.web ||
-              business.tiktok) && (
-              <div className="my-6 space-y-2">
-                <h3 className="text-xl font-semibold mb-2">Síguenos</h3>
-                <div className="flex flex-wrap gap-2">
-                  {business.instagram && (
-                    <a
-                      href={business.instagram}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-block bg-pink-600 text-white px-4 py-2 rounded hover:bg-pink-700"
-                    >
-                      Instagram
-                    </a>
-                  )}
-                  {business.facebook && (
-                    <a
-                      href={business.facebook}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-block bg-blue-700 text-white px-4 py-2 rounded hover:bg-blue-800"
-                    >
-                      Facebook
-                    </a>
-                  )}
-                  {business.tiktok && (
-                    <a
-                      href={business.tiktok}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-block bg-black text-white px-4 py-2 rounded hover:opacity-90"
-                    >
-                      TikTok
-                    </a>
-                  )}
-                  {business.web && (
-                    <a
-                      href={business.web}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-block bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700"
-                    >
-                      Visitar sitio web
-                    </a>
-                  )}
-                </div>
-              </div>
-            )}
+            <MapBlock business={business} />
 
             {Array.isArray(business.services) &&
               business.services.length > 0 && (
@@ -674,11 +1209,15 @@ const BusinessDetailPage = () => {
                   </h3>
                   <ul className="list-disc list-inside text-sm text-gray-700">
                     {business.services.map((service, idx) => (
-                      <li key={idx}>{service}</li>
+                      <li key={idx}>
+                        {onlyPrettyThisBiz ? prettyService(service) : service}
+                      </li>
                     ))}
                   </ul>
                 </div>
               )}
+
+            <SocialLinks b={business} />
           </>
         )}
 
@@ -686,11 +1225,19 @@ const BusinessDetailPage = () => {
           <>
             {business.imagen_url && (
               <img
-                src={business.imagen_url}
+                src={
+                  resolvePublicUrl(business.imagen_url) || business.imagen_url
+                }
                 alt={business.nombre}
                 className="w-full max-h-96 object-cover rounded-lg mb-6"
+                onError={(e) => (e.currentTarget.style.display = "none")}
+                loading="lazy"
               />
             )}
+            {/* Badge verde para plan Free */}
+            <div className="bg-green-50 border-l-4 border-green-500 text-green-800 p-4 rounded mb-4">
+              <h3 className="text-lg font-semibold mb-2">Información</h3>
+            </div>
             {!business.descripcion && (
               <p className="text-sm text-red-500">
                 ⚠️ Este negocio aún no tiene descripción cargada.
@@ -717,9 +1264,16 @@ const BusinessDetailPage = () => {
             </p>
 
             <div className="flex flex-col sm:flex-row gap-3 mt-4">
-              <Button asChild>
-                <a href={`tel:${business.telefono}`}>Llamar al negocio</a>
-              </Button>
+              {business.telefono && (
+                <Button asChild>
+                  <a
+                    href={`tel:${business.telefono}`}
+                    onClick={handleCallClick}
+                  >
+                    Llamar al negocio
+                  </a>
+                </Button>
+              )}
             </div>
             {business.whatsapp &&
               !/^\+?\d{7,15}$/.test(
@@ -748,17 +1302,6 @@ const BusinessDetailPage = () => {
                 </div>
               </div>
             )}
-            {business.mapa_embed_url && (
-              <div className="mt-6">
-                <iframe
-                  src={business.mapa_embed_url}
-                  title="Ubicación del negocio"
-                  className="w-full h-64 rounded-lg border"
-                  allowFullScreen
-                  loading="lazy"
-                ></iframe>
-              </div>
-            )}
 
             <div className="bg-blue-50 border-l-4 border-blue-500 text-blue-800 p-4 rounded mt-6">
               ¿Eres el dueño?{" "}
@@ -775,29 +1318,43 @@ const BusinessDetailPage = () => {
           <>
             {business.imagen_url && (
               <img
-                src={business.imagen_url}
+                src={
+                  resolvePublicUrl(business.imagen_url) || business.imagen_url
+                }
                 alt={business.nombre}
                 className="w-full max-h-96 object-cover rounded-lg mb-6"
+                onError={(e) => (e.currentTarget.style.display = "none")}
+                loading="lazy"
               />
             )}
 
-            <p className="text-gray-700 mb-4">{business.descripcion}</p>
-            <p className="text-sm text-gray-500 mb-2">
-              Dirección: {business.direccion}
-            </p>
-            {business.hours && (
-              <p className="text-sm text-gray-500 mb-2">
-                🕒 Horarios: {business.hours}
+            <div className="bg-green-50 border-l-4 border-green-500 text-green-800 p-4 rounded mb-4">
+              <h3 className="text-lg font-semibold mb-2">Información</h3>
+              <p className="text-gray-700 pl-1 mb-2">{business.descripcion}</p>
+              <p className="text-sm text-gray-500 pl-1 mb-1">
+                Dirección: {business.direccion}
               </p>
-            )}
-            <p className="text-sm text-gray-500 mb-4">
-              Teléfono: {business.telefono}
-            </p>
+              {business.hours && (
+                <p className="text-sm text-gray-500 pl-1 mb-1">
+                  🕒 Horarios: {business.hours}
+                </p>
+              )}
+              <p className="text-sm text-gray-500 pl-1">
+                Teléfono: {business.telefono}
+              </p>
+            </div>
 
             <div className="flex flex-col sm:flex-row gap-3 mt-4">
-              <Button asChild>
-                <a href={`tel:${business.telefono}`}>Llamar al negocio</a>
-              </Button>
+              {business.telefono && (
+                <Button asChild>
+                  <a
+                    href={`tel:${business.telefono}`}
+                    onClick={handleCallClick}
+                  >
+                    Llamar al negocio
+                  </a>
+                </Button>
+              )}
               {business.whatsapp && (
                 <Button
                   asChild
@@ -823,31 +1380,7 @@ const BusinessDetailPage = () => {
                 </p>
               )}
 
-            {business.mapa_embed_url && (
-              <div className="mt-6">
-                <iframe
-                  src={business.mapa_embed_url}
-                  title="Ubicación del negocio"
-                  className="w-full h-64 rounded-lg border"
-                  allowFullScreen
-                  loading="lazy"
-                ></iframe>
-              </div>
-            )}
-
-            {Array.isArray(business.gallery_images) &&
-              business.gallery_images.length > 0 && (
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">
-                  {business.gallery_images.slice(0, 5).map((imgUrl, index) => (
-                    <img
-                      key={index}
-                      src={optimizeImage(imgUrl, { width: 600, quality: 70 })}
-                      alt={`Foto ${index + 1} de ${business.nombre}`}
-                      className="w-full h-40 object-cover rounded-lg"
-                    />
-                  ))}
-                </div>
-              )}
+            <MapBlock business={business} />
 
             <div className="bg-yellow-50 border-l-4 border-yellow-400 text-yellow-800 p-4 rounded mt-6">
               ¿Quieres destacar más?{" "}
@@ -856,6 +1389,7 @@ const BusinessDetailPage = () => {
               </a>{" "}
               para agregar video, redes sociales y más beneficios.
             </div>
+
             {Array.isArray(business.services) &&
               business.services.length > 0 && (
                 <div className="bg-yellow-50 border-l-4 border-yellow-400 text-yellow-800 p-4 rounded mt-6">
@@ -864,17 +1398,22 @@ const BusinessDetailPage = () => {
                   </h3>
                   <ul className="list-disc list-inside text-sm text-gray-700">
                     {business.services.map((service, idx) => (
-                      <li key={idx}>{service}</li>
+                      <li key={idx}>
+                        {onlyPrettyThisBiz ? prettyService(service) : service}
+                      </li>
                     ))}
                   </ul>
                 </div>
               )}
+            <SocialLinks b={business} />
+
             {business.estadisticas && (
               <div className="bg-gray-50 border-l-4 border-gray-400 text-gray-800 p-4 rounded mt-6">
                 <h3 className="text-lg font-semibold mb-2">Estadísticas</h3>
                 <p className="text-sm">{business.estadisticas}</p>
               </div>
             )}
+
             {(business.plan_type === "profesional" ||
               business.plan_type === "premium") &&
               business.promociones && (
@@ -888,28 +1427,35 @@ const BusinessDetailPage = () => {
           </>
         )}
 
-        {/* Promociones activas (sección única) */}
-        {promocionesArray.length > 0 && (
-          <section className="mt-10">
-            <h2 className="text-xl font-bold mt-10 mb-2 text-red-600">
-              🎉 Promociones activas
-            </h2>
-            <div className="flex flex-wrap gap-4">
-              {promocionesArray.map((promo) => (
-                <div
-                  key={promo.id}
-                  className="w-full sm:w-1/2 md:w-1/3 lg:w-1/4"
-                >
-                  <PromoCard promo={promo} contexto="detalle" />
+        {/* Promociones activas */}
+        {plan === "premium" && promocionesArray.length > 0 && (
+          <>
+            {/* Si hay entre 2 y 4 promos, usamos carrusel horizontal compacto.
+                Si hay 1 o más de 4, usamos el grid normal para no saturar. */}
+            {promocionesArray.length >= 2 && promocionesArray.length <= 4 ? (
+              <PromoCarousel promos={promocionesArray} />
+            ) : (
+              <section className="mt-10">
+                <h2 className="text-xl font-bold mt-10 mb-2 text-red-600">
+                  🎉 Promociones activas
+                </h2>
+                <div className="flex flex-wrap gap-4">
+                  {promocionesArray.map((promo) => (
+                    <div
+                      key={promo.id}
+                      className="w-full sm:w-1/2 md:w-1/3 lg:w-1/4"
+                    >
+                      <PromoCard promo={promo} contexto="detalle" />
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          </section>
+              </section>
+            )}
+          </>
         )}
 
-        {/* -------- NUEVO: Menú (al final) -------- */}
+        {/* Menú (al final) */}
         {shouldShowMenu && renderMenuBlock()}
-        {/* --------------------------------------- */}
 
         {plan === "premium" && (
           <div className="bg-green-50 border-l-4 border-green-500 text-green-800 p-4 rounded mt-10">
@@ -919,8 +1465,19 @@ const BusinessDetailPage = () => {
           </div>
         )}
       </div>
+      <Toaster />
     </>
   );
 };
 
 export default BusinessDetailPage;
+
+<style jsx global>{`
+  .galeria-img {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    object-fit: cover;
+    border-radius: 8px;
+    background-color: #f0f0f0;
+  }
+`}</style>;
