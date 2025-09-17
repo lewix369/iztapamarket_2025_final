@@ -2,20 +2,20 @@
   "version": 2,
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
-  "rewrites": [
+
+  "routes": [
+    { "handle": "filesystem" },
+    { "src": "/api/(.*)", "dest": "/api/$1" },
     {
-      "source": "/google3a072cd80aefa66d.html",
-      "destination": "/google3a072cd80aefa66d.html"
+      "src": "/google3a072cd80aefa66d.html",
+      "dest": "/google3a072cd80aefa66d.html"
     },
-    { "source": "/robots.txt", "destination": "/robots.txt" },
-    { "source": "/api/sitemap", "destination": "/api/sitemap" },
-    {
-      "source": "/manifest.webmanifest",
-      "destination": "/manifest.webmanifest"
-    },
-    { "source": "/service-worker.js", "destination": "/service-worker.js" },
-    { "source": "/(.*)", "destination": "/index.html" }
+    { "src": "/manifest.webmanifest", "dest": "/manifest.webmanifest" },
+    { "src": "/service-worker.js", "dest": "/service-worker.js" },
+    { "src": "/robots.txt", "dest": "/robots.txt" },
+    { "src": "/(.*)", "dest": "/index.html" }
   ],
+
   "redirects": [
     {
       "source": "/sitemap.xml",
@@ -23,6 +23,7 @@
       "permanent": true
     }
   ],
+
   "headers": [
     {
       "source": "/(.*)",
