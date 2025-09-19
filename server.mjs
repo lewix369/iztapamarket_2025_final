@@ -1,31 +1,37 @@
-/* ================================
-   404 para rutas no definidas (debe ir DESPUÉS de tus rutas)
-================================ */
-/* ================================
-   Sitemap dinámico (SEO)
-=============================== */
-// IMPORTANTE: esta ruta debe declararse DESPUÉS de `const app = express()`
-// y ANTES del middleware 404.
-// --- IMPORTS (deben ir hasta arriba) ---
+// ================================
+// server.mjs  —  Backend Express
+// ================================
+
+// 1) ENV (.env.production por defecto, sobreescribible con DOTENV_CONFIG_PATH)
 import dotenv from "dotenv";
 import dotenvExpand from "dotenv-expand";
-import express from "express"; // <— IMPORTA EXPRESS ANTES DE USAR app
-import cors from "cors";
-import { createClient } from "@supabase/supabase-js";
-
-// .env
 const myEnv = dotenv.config({
   path: process.env.DOTENV_CONFIG_PATH || ".env.production",
 });
-dotenvExpand.expand(myEnv);
+try {
+  dotenvExpand.expand(myEnv);
+} catch (_) {
+  // ignore
+}
 
-// --- CREA LA APP (después de los imports) ---
+// 2) Deps de servidor
+import express from "express";
+import cors from "cors";
+import { createClient } from "@supabase/supabase-js";
+
+// 3) Router del webhook (tu handler robusto ya vive ahí)
+import webhookMpRouter from "./src/lib/api/routes/webhookMercadoPago.mjs";
+
+// 4) App base
 const app = express();
-// Middlewares básicos
 app.use(cors({ origin: true, credentials: true }));
-app.use(express.json());
+app.use(express.json()); // cuerpo JSON por defecto
 
-// Supabase (solo lectura para sitemap)
+// 5) Healthcheck
+app.get("/health", (_req, res) => res.status(200).json({ ok: true }));
+
+// 6) Supabase "anon" para sitemap (solo lectura)
+//    *NO* es el Service Role; ese lo usa tu router del webhook internamente.
 const SUPABASE_URL =
   process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
 const SUPABASE_ANON_KEY =
@@ -35,12 +41,8 @@ const supabase =
     ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
     : null;
 
-// Healthcheck rápido
-app.get("/health", (_req, res) => res.json({ ok: true }));
-
-// ================================
-// Mercado Pago: crear preferencia (SERVER-SIDE)
-// ================================
+// 7) Crear preferencia de Mercado Pago (server-side)
+//    Usa la `notification_url` del body si viene (para túneles), si no usa env.
 app.post("/api/create_preference", async (req, res) => {
   try {
     const {
@@ -49,21 +51,28 @@ app.post("/api/create_preference", async (req, res) => {
       quantity = 1,
       currency_id = "MXN",
       external_reference,
+      notification_url: notificationUrlFromBody,
     } = req.body || {};
+    const payer_email = req.body?.payer_email;
+    const binary_mode = Boolean(req.body?.binary_mode);
 
     const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
-    const NOTIF_URL = process.env.MP_WEBHOOK_URL; // debe ser público (ngrok o dominio prod)
-    const BACK_SUCCESS = process.env.REGISTRO_SUCCESS_URL;
-    const BACK_FAILURE = process.env.REGISTRO_FAILURE_URL;
-    const BACK_PENDING = process.env.REGISTRO_PENDING_URL;
+    const NOTIF_URL = notificationUrlFromBody || process.env.MP_WEBHOOK_URL;
+    const BACK_SUCCESS = process.env.REGISTRO_SUCCESS_URL || "";
+    const BACK_FAILURE = process.env.REGISTRO_FAILURE_URL || "";
+    const BACK_PENDING = process.env.REGISTRO_PENDING_URL || "";
 
     if (!MP_ACCESS_TOKEN) {
       return res
         .status(500)
         .json({ error: "MP_ACCESS_TOKEN ausente en el backend" });
     }
+    if (!NOTIF_URL) {
+      return res
+        .status(400)
+        .json({ error: "notification_url faltante (body o env)" });
+    }
 
-    // Node 18+ tiene fetch global
     const mpResp = await fetch(
       "https://api.mercadopago.com/checkout/preferences",
       {
@@ -86,6 +95,8 @@ app.post("/api/create_preference", async (req, res) => {
             failure: BACK_FAILURE,
             pending: BACK_PENDING,
           },
+          payer: payer_email ? { email: payer_email } : undefined,
+          binary_mode,
           notification_url: NOTIF_URL,
           external_reference: external_reference || undefined,
           auto_return: "approved",
@@ -102,7 +113,7 @@ app.post("/api/create_preference", async (req, res) => {
       });
     }
 
-    // Devuelve la preferencia al frontend
+    // Devolver tal cual, incluye init_point y sandbox_init_point
     return res.status(200).json(data);
   } catch (err) {
     console.error("[/api/create_preference] Exception:", err?.message || err);
@@ -110,76 +121,9 @@ app.post("/api/create_preference", async (req, res) => {
   }
 });
 
-// Soporte GET para evitar 404 al verificar el endpoint públicamente
-app.get("/webhook_mp", (_req, res) => res.status(200).send("OK"));
-
-// ================================
-// Mercado Pago: Webhook de notificaciones
-// ================================
-// IMPORTANTE: MP llamará a esta ruta desde internet. Debe coincidir con MP_WEBHOOK_URL
-app.post("/webhook_mp", express.json(), async (req, res) => {
-  try {
-    // Acepta de inmediato para evitar reintentos agresivos
-    res.sendStatus(200);
-
-    const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
-    if (!MP_ACCESS_TOKEN) {
-      console.warn("[webhook_mp] MP_ACCESS_TOKEN ausente");
-      return;
-    }
-
-    // MP puede enviar distintos formatos; intentamos extraer el ID del pago
-    const body = req.body || {};
-    const paymentId =
-      body?.data?.id ||
-      req.query?.id ||
-      (body?.resource &&
-        (String(body.resource).match(/\/v1\/payments\/(\d+)/) || [])[1]) ||
-      null;
-
-    console.log("[webhook_mp] payload:", JSON.stringify(body));
-
-    if (!paymentId) {
-      console.warn("[webhook_mp] sin paymentId en payload/query");
-      return;
-    }
-
-    // Consulta del pago para verificar estado real
-    const detResp = await fetch(
-      `https://api.mercadopago.com/v1/payments/${paymentId}`,
-      {
-        headers: {
-          Authorization: `Bearer ${MP_ACCESS_TOKEN}`,
-          Accept: "application/json",
-        },
-      }
-    );
-
-    const det = await detResp.json();
-    if (!detResp.ok) {
-      console.error("[webhook_mp] detalle pago error:", det);
-      return;
-    }
-
-    console.log("[webhook_mp] detalle:", {
-      id: det.id,
-      status: det.status,
-      status_detail: det.status_detail,
-      external_reference: det.external_reference,
-    });
-
-    // TODO: idempotencia: verificar si ya procesamos este paymentId en DB
-    // TODO: actualizar tu orden/suscripción en Supabase según 'det.status'
-    // if (det.status === "approved") { ... }
-  } catch (err) {
-    console.error("[webhook_mp] exception:", err?.message || err);
-    // No relanzamos error al cliente porque ya respondimos 200 arriba
-  }
-});
-
+// 8) Sitemap dinámico (SEO) — usa Supabase anon si está configurado
 app.get("/api/sitemap", async (req, res) => {
   try {
-    // Base URL dinámica (respeta proxies / prod)
     const proto = (
       req.headers["x-forwarded-proto"] ||
       req.protocol ||
@@ -192,7 +136,6 @@ app.get("/api/sitemap", async (req, res) => {
     ).toString();
     const BASE_URL = `${proto}://${host}`.replace(/\/+$/, "");
 
-    // util: escapar entidades XML
     const xmlEscape = (s = "") =>
       String(s)
         .replace(/&/g, "&amp;")
@@ -203,7 +146,6 @@ app.get("/api/sitemap", async (req, res) => {
 
     const today = new Date().toISOString().split("T")[0];
 
-    // páginas estáticas mínimas
     const urls = [
       { path: "/", changefreq: "daily", priority: "1.0", lastmod: today },
       {
@@ -244,64 +186,58 @@ app.get("/api/sitemap", async (req, res) => {
       },
     ];
 
-    // Enriquecimiento dinámico desde Supabase si el cliente está disponible
     if (supabase) {
       try {
-        // Categorías (tolerante a distintos esquemas: slug, slug_categoria o nombre)
+        // Categorías
         const { data: categorias, error: catErr } = await supabase
           .from("categorias")
           .select("slug, slug_categoria, nombre")
           .limit(2000);
-
-        if (catErr) {
-          console.warn("[sitemap] categorias error:", catErr.message);
-        } else {
-          (categorias || []).forEach((cat) => {
+        if (!catErr && Array.isArray(categorias)) {
+          categorias.forEach((cat) => {
             const slug = (cat?.slug || cat?.slug_categoria || cat?.nombre || "")
               .toString()
               .trim();
-            if (!slug) return;
-            urls.push({
-              path: `/categorias/${slug}`,
-              changefreq: "weekly",
-              priority: "0.7",
-              lastmod: today,
-            });
+            if (slug) {
+              urls.push({
+                path: `/categorias/${slug}`,
+                changefreq: "weekly",
+                priority: "0.7",
+                lastmod: today,
+              });
+            }
           });
         }
 
-        // Negocios aprobados y no eliminados
+        // Negocios
         const { data: negocios, error: bizErr } = await supabase
           .from("negocios")
           .select("slug, updated_at")
           .eq("is_deleted", false)
           .eq("is_approved", true)
           .limit(5000);
-
-        if (bizErr) {
-          console.warn("[sitemap] negocios error:", bizErr.message);
-        } else {
-          (negocios || []).forEach((biz) => {
-            if (!biz?.slug) return;
-            urls.push({
-              path: `/negocio/${biz.slug}`,
-              changefreq: "weekly",
-              priority: "0.6",
-              lastmod: biz?.updated_at
-                ? new Date(biz.updated_at).toISOString().split("T")[0]
-                : today,
-            });
+        if (!bizErr && Array.isArray(negocios)) {
+          negocios.forEach((biz) => {
+            if (biz?.slug) {
+              urls.push({
+                path: `/negocio/${biz.slug}`,
+                changefreq: "weekly",
+                priority: "0.6",
+                lastmod: biz?.updated_at
+                  ? new Date(biz.updated_at).toISOString().split("T")[0]
+                  : today,
+              });
+            }
           });
         }
-      } catch (dynErr) {
+      } catch (e) {
         console.warn(
-          "[sitemap] fallo al enriquecer dinámicamente:",
-          dynErr?.message || dynErr
+          "[sitemap] enriquecimiento dinámico falló:",
+          e?.message || e
         );
       }
     }
 
-    // Soporta modo debug opcional para inspección rápida
     if (req.query.debug === "1") {
       return res.status(200).json({
         baseUrl: BASE_URL,
@@ -344,16 +280,19 @@ app.get("/api/sitemap", async (req, res) => {
   }
 });
 
-// Alias clásico para crawlers
+// Alias para crawlers
 app.get("/sitemap.xml", (_req, res) => {
   res.redirect(301, "/api/sitemap");
 });
-/* ================================
-   END Sitemap dinámico (SEO)
-=============================== */
-/* ================================
-   Arranque del servidor
-================================ */
+
+// 9) Monta tu router del Webhook de Mercado Pago
+//    (tu router ya hace express.json y toda la lógica robusta)
+app.use("/webhook_mp", webhookMpRouter);
+
+// 10) 404 (después de TODAS las rutas)
+app.use((req, res) => res.status(404).json({ ok: false, error: "Not Found" }));
+
+// 11) Arranque
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🟢 Backend activo en: http://localhost:${PORT}`);

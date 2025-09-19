@@ -3,15 +3,28 @@ import express from "express";
 import mercadopago from "mercadopago";
 import { createClient } from "@supabase/supabase-js";
 
-console.log("🔔 webhook_mp VERSION=2025-09-08_01");
+console.log("🔔 webhook_mp VERSION=2025-09-18_02");
 
 const router = express.Router();
+
+/* ── Body parser para TODO el router ─────────────────────────── */
+router.use(express.json({ type: "*/*" }));
 
 /* ── Seguridad opcional: shared secret ───────────────────────── */
 router.use((req, res, next) => {
   const required = process.env.MP_WEBHOOK_SECRET || "";
   if (!required) return next(); // desactivado si no se define
-  const tok = req.query?.token || req.headers["x-webhook-token"];
+  // Sources we accept for the token:
+  // 1) query ?token=...
+  // 2) header x-webhook-token
+  // 3) Authorization: Bearer <token>
+  let bearer = undefined;
+  const auth = req.headers["authorization"];
+  if (typeof auth === "string" && auth.toLowerCase().startsWith("bearer ")) {
+    bearer = auth.slice(7).trim();
+  }
+  const tok = req.query?.token || req.headers["x-webhook-token"] || bearer;
+
   if (tok !== required)
     return res.status(401).json({ ok: false, error: "unauthorized" });
   next();
@@ -173,11 +186,11 @@ function parseExternalRefString(refStr) {
 
 /* ── Diagnóstico ─────────────────────────────────────────────── */
 router.all("/__version", (_req, res) => {
-  res.json({ version: "2025-08-28_07" });
+  res.json({ ok: true, version: "2025-09-18_02" });
 });
 
 /* ── Ping / prueba manual (?test=1) ──────────────────────────── */
-router.all("/", async (req, res, next) => {
+router.all("/", async (req, res) => {
   if (req.query?.test) {
     const { data } = req.body || {};
     if (data?.status && data?.metadata?.email) {
@@ -197,14 +210,14 @@ router.all("/", async (req, res, next) => {
         .status(200)
         .json({ ok: true, via: "test_ping", ignored_status: status });
     }
-    return res.status(200).send("OK_TEST");
+    return res.status(200).json({ ok: true, via: "OK_TEST" });
   }
   // si no es test, respondemos 200 para healthchecks (ngrok/MP)
-  return res.status(200).send("OK");
+  return res.status(200).json({ ok: true, route: "/webhook_mp" });
 });
 
 /* ── Webhook principal de Mercado Pago ───────────────────────── */
-router.post("/", express.json(), async (req, res) => {
+router.post("/", async (req, res) => {
   try {
     const { type, action, data } = req.body || {};
 

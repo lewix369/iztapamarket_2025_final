@@ -1,72 +1,11 @@
 // src/components/PlanCheckout.jsx
-import { useUserPlan } from "@/hooks/useUserPlan";
 import React, { useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
-
-// O usa tu helper si ya lo tienes:
-// import { createPreference } from "../lib/CreatePreference";
-async function createPreference(plan, email) {
-  const ENDPOINT =
-    import.meta?.env?.VITE_CREATE_PREFERENCE_URL ||
-    (window?.location?.hostname === "localhost"
-      ? "http://localhost:3000/create_preference"
-      : "/api/createPreference");
-
-  const resp = await fetch(ENDPOINT, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ plan, email }),
-  });
-
-  if (!resp.ok) {
-    const txt = await resp.text();
-    throw new Error(`Servidor ${resp.status}: ${txt}`);
-  }
-
-  const data = await resp.json();
-  const url =
-    typeof data === "string"
-      ? data
-      : data?.init_point || data?.sandbox_init_point || "";
-
-  if (!url || !url.startsWith("http")) {
-    throw new Error("Respuesta sin init_point válido.");
-  }
-
-  // Agrega email y plan al query (opcional, útil para tus callbacks)
-  const u = new URL(url);
-  if (!u.searchParams.get("email")) u.searchParams.set("email", email);
-  if (!u.searchParams.get("plan")) u.searchParams.set("plan", plan);
-  return u.toString();
-}
-
-async function activateFree(email) {
-  const emailClean = String(email || "")
-    .trim()
-    .toLowerCase();
-  if (!emailClean || !/\S+@\S+\.\S+/.test(emailClean)) {
-    throw new Error("Ingresa un email válido.");
-  }
-  const now = new Date().toISOString();
-
-  // Upsert del perfil como FREE
-  const { error: e1 } = await supabase
-    .from("profiles")
-    .upsert(
-      { email: emailClean, plan_type: "free", updated_at: now },
-      { onConflict: "email" }
-    );
-
-  if (e1) throw new Error(e1.message || "No se pudo activar el plan Free.");
-  window.location.href = `/registro?plan=free&email=${encodeURIComponent(
-    emailClean
-  )}`;
-  return { ok: true };
-}
+import { createAndPickCheckoutUrl } from "@/lib/mpCheckout";
 
 export default function PlanCheckout() {
   const [email, setEmail] = useState("");
-  const [loadingPlan, setLoadingPlan] = useState(null); // "pro" | "premium" | null
+  const [loadingPlan, setLoadingPlan] = useState(null);
   const [error, setError] = useState("");
   const [freeLoading, setFreeLoading] = useState(false);
   const [okMsg, setOkMsg] = useState("");
@@ -75,15 +14,50 @@ export default function PlanCheckout() {
     try {
       setError("");
       setLoadingPlan(plan);
-      if (!email || !/\S+@\S+\.\S+/.test(email)) {
+
+      const emailClean = String(email || "").trim();
+      if (!/\S+@\S+\.\S+/.test(emailClean)) {
         throw new Error("Ingresa un email válido.");
       }
-      const url = await createPreference(plan, email);
-      window.location.href = url; // redirige al checkout
+
+      const payload = {
+        title: plan === "premium" ? "IztapaMarket Premium" : "IztapaMarket Pro",
+        price: plan === "premium" ? 500 : 300, // ajusta si cambian
+        quantity: 1,
+        currency_id: "MXN",
+        payer_email: emailClean,
+        plan,
+        binary_mode: true,
+        // opcional pero útil para callbacks y búsqueda:
+        external_reference: `${emailClean}|${plan}|web`,
+      };
+
+      const url = await createAndPickCheckoutUrl(payload);
+      window.location.href = url;
     } catch (e) {
       setError(e.message || "Error al crear la preferencia.");
       setLoadingPlan(null);
     }
+  };
+
+  const activateFree = async (emailArg) => {
+    const emailClean = String(emailArg || "")
+      .trim()
+      .toLowerCase();
+    if (!emailClean || !/\S+@\S+\.\S+/.test(emailClean)) {
+      throw new Error("Ingresa un email válido.");
+    }
+    const now = new Date().toISOString();
+    const { error: e1 } = await supabase
+      .from("profiles")
+      .upsert(
+        { email: emailClean, plan_type: "free", updated_at: now },
+        { onConflict: "email" }
+      );
+    if (e1) throw new Error(e1.message || "No se pudo activar el plan Free.");
+    window.location.href = `/registro?plan=free&email=${encodeURIComponent(
+      emailClean
+    )}`;
   };
 
   const handleFree = async () => {
@@ -91,9 +65,7 @@ export default function PlanCheckout() {
       setError("");
       setOkMsg("");
       setFreeLoading(true);
-
       await activateFree(email);
-      // Redirecciona ya dentro de activateFree, no es necesario setOkMsg aquí
     } catch (e) {
       setError(e.message || "Error al activar el plan Free.");
     } finally {
@@ -140,6 +112,7 @@ export default function PlanCheckout() {
         >
           {freeLoading ? "Activando…" : "Continuar con Plan Free"}
         </button>
+
         <button
           onClick={() => handleBuy("pro")}
           disabled={loadingPlan !== null}

@@ -2,63 +2,9 @@
   "version": 2,
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
-
   "routes": [
-    { "handle": "filesystem" },
-    { "src": "/api/(.*)", "dest": "/api/$1" },
-    {
-      "src": "/google3a072cd80aefa66d.html",
-      "dest": "/google3a072cd80aefa66d.html"
-    },
-    { "src": "/manifest.webmanifest", "dest": "/manifest.webmanifest" },
-    { "src": "/service-worker.js", "dest": "/service-worker.js" },
-    { "src": "/robots.txt", "dest": "/robots.txt" },
+    { "src": "^/api/create_preference$", "dest": "/api/create_preference" },
+    { "src": "^/api/webhook_mp$", "dest": "/api/webhook_mp" },
     { "src": "/(.*)", "dest": "/index.html" }
-  ],
-
-  "redirects": [
-    {
-      "source": "/sitemap.xml",
-      "destination": "/api/sitemap",
-      "permanent": true
-    }
-  ],
-
-  "headers": [
-    {
-      "source": "/(.*)",
-      "headers": [{ "key": "x-vercel-skip-feedback-widget", "value": "1" }]
-    },
-    {
-      "source": "/google3a072cd80aefa66d.html",
-      "headers": [
-        { "key": "x-vercel-skip-feedback-widget", "value": "1" },
-        { "key": "Cache-Control", "value": "no-cache" }
-      ]
-    },
-    {
-      "source": "/index.html",
-      "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
-    },
-    {
-      "source": "/:path*\\.(js|css|png|jpg|jpeg|gif|svg|ico|webp|woff2|ttf|json)",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "public, max-age=31536000, immutable"
-        }
-      ]
-    },
-    {
-      "source": "/service-worker.js",
-      "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
-    },
-    {
-      "source": "/api/sitemap",
-      "headers": [
-        { "key": "Cache-Control", "value": "no-cache" },
-        { "key": "x-vercel-skip-feedback-widget", "value": "1" }
-      ]
-    }
   ]
 }
