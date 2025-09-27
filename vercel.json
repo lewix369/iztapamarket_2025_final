@@ -4,7 +4,19 @@
   "outputDirectory": "dist",
   "routes": [
     { "src": "^/api/create_preference$", "dest": "/api/create_preference" },
+    {
+      "src": "^/api/create_preference_v2$",
+      "dest": "/api/create_preference_v2"
+    },
     { "src": "^/api/webhook_mp$", "dest": "/api/webhook_mp" },
     { "src": "/(.*)", "dest": "/index.html" }
+  ],
+  "redirects": [
+    {
+      "source": "/(.*)",
+      "has": [{ "type": "host", "value": "www.iztapamarket.com" }],
+      "destination": "https://iztapamarket.com/:splat",
+      "permanent": true
+    }
   ]
 }
