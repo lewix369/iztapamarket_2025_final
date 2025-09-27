@@ -10,13 +10,5 @@
     },
     { "src": "^/api/webhook_mp$", "dest": "/api/webhook_mp" },
     { "src": "/(.*)", "dest": "/index.html" }
-  ],
-  "redirects": [
-    {
-      "source": "/(.*)",
-      "has": [{ "type": "host", "value": "www.iztapamarket.com" }],
-      "destination": "https://iztapamarket.com/:splat",
-      "permanent": true
-    }
   ]
 }
