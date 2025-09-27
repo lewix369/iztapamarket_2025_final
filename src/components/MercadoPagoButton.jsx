@@ -1,67 +1,51 @@
-// src/components/MercadoPagoButton.jsx
-import { useState, useMemo } from "react";
-import { createPreference } from "@/lib/CreatePreference";
+import { useEffect, useState } from "react";
+import { initMercadoPago, Wallet } from "@mercadopago/sdk-react";
 
-export default function MercadoPagoButton({ nombre, plan = "premium", email }) {
+// Inicializa Mercado Pago con tu Public Key y locale
+initMercadoPago(import.meta.env.VITE_MP_PUBLIC_KEY, { locale: "es-MX" });
+
+export default function MercadoPagoButton({
+  email = "TESTUSER16368732@testuser.com", // usa el buyer de pruebas
+  plan = "premium",
+  title = "Suscripción premium",
+  unit_price = 10,
+  quantity = 1,
+}) {
+  const [preferenceId, setPreferenceId] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
-  // Normaliza "pro" | "premium"
-  const normalizedPlan = useMemo(() => {
-    const p = typeof plan === "string" ? plan.trim().toLowerCase() : "premium";
-    return p === "pro" || p === "premium" ? p : "premium";
-  }, [plan]);
-
-  async function handlePago() {
-    if (loading) return;
-    setLoading(true);
-    try {
-      const finalEmail = (
-        email ||
-        localStorage.getItem("reg_email") ||
-        ""
-      ).trim();
-      if (!finalEmail) {
-        alert("Falta el correo para continuar con el pago.");
-        return;
+  useEffect(() => {
+    (async () => {
+      try {
+        setLoading(true);
+        setError("");
+        const resp = await fetch(import.meta.env.VITE_CREATE_PREFERENCE_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, plan, title, unit_price, quantity }),
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data?.id) {
+          throw new Error(data?.error || "No se pudo crear la preferencia");
+        }
+        setPreferenceId(data.id);
+      } catch (e) {
+        setError(e.message || String(e));
+      } finally {
+        setLoading(false);
       }
+    })();
+  }, [email, plan, title, unit_price, quantity]);
 
-      // Guarda para success/callback
-      localStorage.setItem("reg_plan", normalizedPlan);
-      localStorage.setItem("reg_email", finalEmail);
-      if (nombre) localStorage.setItem("reg_nombre", nombre);
-
-      // 👇 Llama con (plan, email) — lo que tu backend espera
-      const pref = await createPreference(normalizedPlan, finalEmail);
-
-      // Guarda el tag para correlacionar (webhook / success)
-      if (pref?.tag) localStorage.setItem("reg_tag", String(pref.tag));
-
-      const initPoint =
-        typeof pref === "string" ? pref : pref?.initPoint || pref?.freeRedirect;
-
-      if (typeof initPoint === "string" && initPoint.startsWith("http")) {
-        window.location.href = initPoint;
-      } else {
-        console.error("Respuesta inesperada de createPreference:", pref);
-        alert("No se pudo iniciar el pago. Intenta nuevamente.");
-      }
-    } catch (e) {
-      console.error("❌ Error al iniciar pago:", e);
-      alert("Ocurrió un error al procesar el pago.");
-    } finally {
-      setLoading(false);
-    }
-  }
+  if (loading) return <p>Generando preferencia…</p>;
+  if (error) return <p style={{ color: "crimson" }}>Error: {error}</p>;
+  if (!preferenceId) return null;
 
   return (
-    <button
-      onClick={handlePago}
-      disabled={loading}
-      className={`px-4 py-2 rounded text-white ${
-        loading ? "bg-gray-400" : "bg-orange-500 hover:bg-orange-600"
-      }`}
-    >
-      {loading ? "Redirigiendo..." : "Pagar con Mercado Pago"}
-    </button>
+    <div style={{ width: 320 }}>
+      {/* Wallet renderiza el botón amarillo y redirige a MP */}
+      <Wallet initialization={{ preferenceId }} />
+    </div>
   );
 }

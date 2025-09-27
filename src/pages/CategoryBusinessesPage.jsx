@@ -20,14 +20,34 @@ export default function CategoryBusinessesPage() {
 
     const fetchNegocios = async () => {
       setLoading(true);
-      const { data, error } = await supabase
+
+      // Normaliza el slug a la forma almacenada en la BD (p. ej. "alimentos y bebidas")
+      const categoriaHuman = decodeURIComponent(slug).replace(/-/g, " ").trim();
+
+      // Columnas a seleccionar en ambas consultas
+      const selectCols =
+        "id,nombre,slug,descripcion,direccion,portada_url,imagen_url,logo_url,is_approved,is_deleted";
+
+      // 1) Primero: buscar por slug_categoria (ruta canónica)
+      let { data, error } = await supabase
         .from("negocios")
-        .select(
-          "id,nombre,slug,descripcion,direccion,portada_url,imagen_url,logo_url,is_approved,is_deleted"
-        )
+        .select(selectCols)
         .eq("slug_categoria", slug)
         .eq("is_deleted", false)
         .eq("is_approved", true);
+
+      // 2) Si no hay resultados y no hubo error, hacemos fallback por nombre de categoría
+      if (!error && (data?.length ?? 0) === 0) {
+        const fallback = await supabase
+          .from("negocios")
+          .select(selectCols)
+          .ilike("categoria", categoriaHuman) // ej. "alimentos y bebidas"
+          .eq("is_deleted", false)
+          .eq("is_approved", true);
+
+        data = fallback.data;
+        error = fallback.error;
+      }
 
       if (!cancelled) {
         if (error) {

@@ -37,11 +37,32 @@ export default function PaySuccess() {
       merchant_order_id === "" &&
       (planParam === "free" || url_status === "free"));
 
-  // Base del backend (soporta túnel de Cloudflare vía Vite)
-  const API_BASE = useMemo(
-    () => (import.meta.env.VITE_MP_BASE || "").replace(/\/$/, ""),
-    []
-  );
+  // Base del backend (quita /api si viene de VITE_API_BASE)
+  const BACKEND_ROOT = useMemo(() => {
+    const api =
+      import.meta.env.VITE_API_BASE || import.meta.env.VITE_MP_BASE || "";
+    const trimmed = (api || "").replace(/\/$/, "");
+    return trimmed.replace(/\/api$/, "");
+  }, []);
+
+  // Feature flag: auto-login via magic link after pago aprobado
+  const AUTH_AUTO_LOGIN =
+    (import.meta.env.VITE_AUTH_AUTO_LOGIN || "0").toString() === "1";
+
+  // Feature flag: permitir omitir verificación en backend (útil en SANDBOX)
+  const VERIFY_MP = (import.meta.env.VITE_VERIFY_MP || "1").toString() === "1";
+
+  // Construye redirect_to para el magic link (vuelve a este front)
+  function buildRedirectTo(nextPath) {
+    try {
+      const base = window.location.origin.replace(/\/$/, "");
+      return `${base}/auth/callback?next=${encodeURIComponent(
+        nextPath || "/mi-negocio"
+      )}`;
+    } catch {
+      return "/auth/callback";
+    }
+  }
 
   // Supabase (frontend: SIEMPRE con anon key)
   const supabase = useMemo(() => {
@@ -50,6 +71,30 @@ export default function PaySuccess() {
     if (!url || !key) return null;
     return createClient(url, key, { auth: { persistSession: true } });
   }, []);
+
+  // Pide magic link al backend y hace redirect si hay action_link
+  async function tryAutoMagicLink(email, nextPath) {
+    if (!email) return false;
+    if (!BACKEND_ROOT) return false;
+    try {
+      // El endpoint diag vive en la raíz del backend (no en /api)
+      const backendRoot = BACKEND_ROOT;
+      const redirect = buildRedirectTo(nextPath);
+      const url = `${backendRoot}/diag/magic-link?email=${encodeURIComponent(
+        email
+      )}&redirect=${encodeURIComponent(redirect)}`;
+      const res = await fetch(url, { headers: { Accept: "application/json" } });
+      const j = await res.json().catch(() => ({}));
+      if (j?.action_link) {
+        // redirige a Supabase (volverá a /auth/callback?next=...)
+        window.location.assign(j.action_link);
+        return true;
+      }
+    } catch (e) {
+      console.warn("tryAutoMagicLink error:", e);
+    }
+    return false;
+  }
 
   // Estado de verificación real con el backend
   // now supports: "approved" | "pending" | "failed" | "error" | null
@@ -78,7 +123,7 @@ export default function PaySuccess() {
       id: `FREE-${tagParam || Date.now()}`,
       status: "approved",
       transaction_amount: 0,
-      payer: { email: emailParam || extEmail || "" },
+      // FREE es anónimo: sin correo
       additional_info: {
         items: [{ title: "Plan FREE IztapaMarket" }],
         payer: { first_name: "FREE" },
@@ -133,9 +178,41 @@ export default function PaySuccess() {
     return "failed";
   }
 
+  // 0.5) Atajo local: si la URL ya viene con approved/success, marcar aprobado al instante
+  // (evita esperar el polling cuando MP ya nos redirigió con estado final)
+  useEffect(() => {
+    if (isFree) return; // FREE ya tiene su propio atajo arriba
+    // Sólo al montar: si trae approved/success y al menos algún id de referencia, damos por bueno
+    const urlApproved = url_status === "approved" || url_status === "success";
+    const hasAnyRef = Boolean(payment_id || merchant_order_id || preference_id);
+    if (urlApproved && hasAnyRef) {
+      const minimal = {
+        id: payment_id || merchant_order_id || preference_id || "url-approved",
+        status: "approved",
+        payer: { email: (emailParam || extEmail || "").toLowerCase() },
+        additional_info: {
+          items: [
+            {
+              title: `Plan ${
+                (planParam || extPlan || "").toLowerCase().includes("premium")
+                  ? "premium"
+                  : planParam || extPlan || "pro"
+              }`,
+            },
+          ],
+          payer: { email: (emailParam || extEmail || "").toLowerCase() },
+        },
+      };
+      setDetails(minimal);
+      setVerified("approved");
+      setLoading(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // 1) Verificación de pago en backend (resiliente + polling corto)
   useEffect(() => {
-    if (isFree) return; // FREE no verifica con MP
+    // FREE no verifica con MP; y si VERIFY_MP=0 (sandbox), saltamos verificación
+    if (isFree || !VERIFY_MP) return;
     let cancelled = false;
 
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -197,7 +274,7 @@ export default function PaySuccess() {
     (async () => {
       try {
         setLoading(true);
-        const base = API_BASE || window.location.origin;
+        const base = BACKEND_ROOT || window.location.origin;
 
         // 1) Directo por payment_id (con polling si no está approved aún)
         if (payment_id) {
@@ -297,13 +374,18 @@ export default function PaySuccess() {
     return () => {
       cancelled = true;
     };
-  }, [API_BASE, payment_id, merchant_order_id, external_reference, isFree]);
+  }, [BACKEND_ROOT, payment_id, merchant_order_id, external_reference, isFree]);
 
   // 2) Registro/Upsert en Supabase + redirección al formulario
   useEffect(() => {
     let cancelled = false;
 
     async function upsertProfileAndRedirect({ plan, email, paidFlag }) {
+      // FREE: sin login, sin supabase, sin email; redirige directo al formulario
+      if (String(plan).toLowerCase() === "free") {
+        navigate(`/registro?plan=free`, { replace: true });
+        return;
+      }
       if (!supabase) return;
       if (!email) return;
       const now = new Date().toISOString();
@@ -322,6 +404,23 @@ export default function PaySuccess() {
       try {
         localStorage.setItem("reg_email", email.toLowerCase());
         localStorage.setItem("reg_plan", plan);
+      } catch {}
+
+      // Si está habilitado el autologin y NO hay usuario autenticado:
+      // ⚠️ FREE NUNCA debe iniciar sesión automáticamente.
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        if (AUTH_AUTO_LOGIN && !user && String(plan).toLowerCase() !== "free") {
+          const nextPath = `/registro?plan=${encodeURIComponent(
+            plan
+          )}&email=${encodeURIComponent(email)}${
+            paidFlag ? `&paid=${encodeURIComponent(paidFlag)}` : ""
+          }`;
+          const launched = await tryAutoMagicLink(email, nextPath);
+          if (launched) return; // dejamos que redirija hacia Supabase
+        }
       } catch {}
 
       const qs = new URLSearchParams({ plan, email });
@@ -363,7 +462,7 @@ export default function PaySuccess() {
       if (isFree) {
         setRegMsg("¡Plan FREE activado!");
         if (!cancelled) {
-          await upsertProfileAndRedirect({ plan: "free", email: payerEmail });
+          await upsertProfileAndRedirect({ plan: "free" });
         }
         return;
       }
@@ -510,7 +609,7 @@ export default function PaySuccess() {
             <b>External reference:</b> {external_reference}
           </div>
         )}
-        {emailToShow && (
+        {!isFree && emailToShow && (
           <div>
             <b>Email:</b> {emailToShow}
           </div>

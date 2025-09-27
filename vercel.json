@@ -3,12 +3,12 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "routes": [
-    { "src": "^/api/create_preference$", "dest": "/api/create_preference" },
     {
       "src": "^/api/create_preference_v2$",
-      "dest": "/api/create_preference_v2"
+      "dest": "/api/create_preference_v2.mjs"
     },
-    { "src": "^/api/webhook_mp$", "dest": "/api/webhook_mp" },
+    { "src": "^/api/create_preference$", "dest": "/api/create_preference" },
+    { "src": "^/api/webhook_mp$", "dest": "/api/webhook_mp.mjs" },
     { "src": "/(.*)", "dest": "/index.html" }
   ]
 }

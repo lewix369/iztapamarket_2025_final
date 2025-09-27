@@ -1,7 +1,7 @@
 // 🔒 VERSIÓN DE PRODUCCIÓN — Lista para iztapamarket.com (misma lógica, pequeños fixes seguros)
 import React, { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabaseClient";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -16,6 +16,38 @@ import { useToast } from "@/components/ui/use-toast";
 import { toast as toastify } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 
+// --- Mercado Pago Device ID helper (from security.js) ---
+function getMpDeviceId() {
+  try {
+    // Prefer explicit memoized value if we already captured it
+    if (typeof window !== "undefined" && window.__MP_DEVICE_ID) {
+      return window.__MP_DEVICE_ID;
+    }
+    // Standard global set by the security script
+    const g =
+      (typeof window !== "undefined" &&
+        (window.MP_DEVICE_SESSION_ID || window.deviceId)) ||
+      "";
+    if (g && typeof window !== "undefined") {
+      window.__MP_DEVICE_ID = g;
+      return g;
+    }
+    // Optional: element <input id="deviceID" value="..." /> if integrator set it
+    const el =
+      typeof document !== "undefined"
+        ? document.getElementById("deviceID")
+        : null;
+    const v = el && el.value ? String(el.value) : "";
+    if (v && typeof window !== "undefined") {
+      window.__MP_DEVICE_ID = v;
+      return v;
+    }
+    return "";
+  } catch {
+    return "";
+  }
+}
+
 const GOOGLE_API_KEY = "AIzaSyA1yCFzlUpn3Kr38gjt6N4dm2XNHy1eBG8";
 const FUNCTIONS_URL =
   import.meta.env.VITE_FUNCTIONS_URL ||
@@ -23,7 +55,14 @@ const FUNCTIONS_URL =
 
 // 🔌 Selector de proveedor para crear preferencia (local backend vs Supabase Function)
 const MP_PROVIDER = import.meta.env.VITE_MP_PROVIDER || "local";
-const MP_BASE = import.meta.env.VITE_MP_BASE || "http://localhost:3000";
+
+// Toggle: require login after payment to finish registration (defaults to true)
+const REQUIRE_LOGIN_AFTER_PAYMENT =
+  (import.meta.env.VITE_REQUIRE_LOGIN_AFTER_PAYMENT ?? "true")
+    .toString()
+    .toLowerCase() === "true";
+
+const MP_BASE = import.meta.env.VITE_MP_BASE || "http://127.0.0.1:3001/api";
 
 // (No usadas ahora, pero ok tenerlas)
 const getGoogleMapsEmbedUrl = async (nombre, direccion) => {
@@ -109,6 +148,7 @@ const RegisterBusinessPage = () => {
   const emailFromUrl = (searchParams.get("email") || "").trim();
 
   const navigate = useNavigate();
+  const location = useLocation();
   const { toast } = useToast();
 
   const [formData, setFormData] = useState({
@@ -136,7 +176,33 @@ const RegisterBusinessPage = () => {
   const [autoTriggered, setAutoTriggered] = useState(false); // 🆕 evita múltiples disparos
 
   useEffect(() => {
-    console.debug("[Registro] mount", { selectedPlan, isPaid, autoPay });
+    // Log básico para verificar flags/endpoint y device id (solo en dev)
+    function resolveCreatePrefUrlForLog() {
+      const envUrl = (import.meta.env.VITE_CREATE_PREFERENCE_URL || "").trim();
+      const mpBase = (import.meta.env.VITE_MP_BASE || "").replace(/\/$/, "");
+      const isAbs = /^https?:\/\//i.test(envUrl);
+      if (isAbs) return envUrl;
+      if (mpBase) return `${mpBase}/create_preference_v2`;
+      if (envUrl) {
+        const base = (
+          typeof window !== "undefined" ? window.location.origin : ""
+        ).replace(/\/$/, "");
+        return `${base}${envUrl.startsWith("/") ? "" : "/"}${envUrl}`;
+      }
+      const base = (
+        typeof window !== "undefined" ? window.location.origin : ""
+      ).replace(/\/$/, "");
+      return `${base}/api/create_preference_v2`;
+    }
+    console.debug("[Registro] mount", {
+      selectedPlan,
+      isPaid,
+      autoPay,
+      VITE_CREATE_PREFERENCE_URL: import.meta.env.VITE_CREATE_PREFERENCE_URL,
+      VITE_MP_BASE: import.meta.env.VITE_MP_BASE,
+      resolved_endpoint: resolveCreatePrefUrlForLog(),
+      mp_device_id: getMpDeviceId(),
+    });
   }, [selectedPlan, isPaid, autoPay]);
 
   useEffect(() => {
@@ -322,10 +388,39 @@ const RegisterBusinessPage = () => {
     }
 
     try {
-      const isLocal = (MP_PROVIDER || "").toLowerCase() === "local";
-      const endpoint = isLocal
-        ? `${MP_BASE.replace(/\/+$/, "")}/create_preference`
-        : `${FUNCTIONS_URL.replace(/\/+$/, "")}/mp-create-preference`;
+      // 📍 Resolver robusto del endpoint:
+      // 1) Si VITE_CREATE_PREFERENCE_URL es ABSOLUTO (http/https), úsalo tal cual.
+      // 2) Si hay VITE_MP_BASE, construimos `${MP_BASE}/create_preference_v2`.
+      // 3) Si VITE_CREATE_PREFERENCE_URL es relativo o no existe, usamos
+      //    `${window.location.origin}/api/create_preference_v2` como último recurso.
+      function resolveCreatePrefUrl() {
+        const envUrl = (
+          import.meta.env.VITE_CREATE_PREFERENCE_URL || ""
+        ).trim();
+        const mpBase = (import.meta.env.VITE_MP_BASE || "").replace(/\/$/, "");
+
+        const isAbs = /^https?:\/\//i.test(envUrl);
+        if (isAbs) return envUrl;
+
+        if (mpBase) return `${mpBase}/create_preference_v2`;
+
+        if (envUrl) {
+          // si vino relativo (e.g. "/api/create_preference_v2"), respétalo contra el origin
+          const base = (
+            typeof window !== "undefined" ? window.location.origin : ""
+          ).replace(/\/$/, "");
+          return `${base}${envUrl.startsWith("/") ? "" : "/"}${envUrl}`;
+        }
+
+        // ultra‑fallback
+        const base = (
+          typeof window !== "undefined" ? window.location.origin : ""
+        ).replace(/\/$/, "");
+        return `${base}/api/create_preference_v2`;
+      }
+
+      const endpoint = resolveCreatePrefUrl();
+      console.debug("[MP] create_preference endpoint =>", endpoint);
 
       try {
         localStorage.setItem("reg_plan", selectedPlan);
@@ -334,12 +429,29 @@ const RegisterBusinessPage = () => {
 
       const resp = await fetch(endpoint, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, plan: selectedPlan }),
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          // Enviar Device ID para mejorar aprobación (MP antifraude)
+          "X-meli-session-id": getMpDeviceId() || "",
+        },
+        body: JSON.stringify({
+          email,
+          plan: selectedPlan,
+          userId: authUser?.id || null,
+        }),
       });
 
       const data = await resp.json().catch(() => ({}));
-      if (!resp.ok || !(data?.init_point || data?.sandbox_init_point)) {
+      const preferInitPoint =
+        (import.meta.env.VITE_FORCE_MP_INIT_POINT || "")
+          .toString()
+          .toLowerCase() === "true";
+      const checkoutUrl = preferInitPoint
+        ? data?.init_point || data?.checkout_url || data?.sandbox_init_point
+        : data?.checkout_url || data?.sandbox_init_point || data?.init_point;
+
+      if (!resp.ok || !checkoutUrl) {
         const msg =
           data?.error ||
           data?.message ||
@@ -353,9 +465,13 @@ const RegisterBusinessPage = () => {
         return;
       }
 
-      const initPoint = data.init_point || data.sandbox_init_point;
-      console.log("[MP] Redirigiendo a:", initPoint);
-      window.location.href = initPoint;
+      console.log("[MP] Redirigiendo a:", checkoutUrl);
+      try {
+        sessionStorage.setItem("last_checkout_url", checkoutUrl);
+      } catch {}
+      window.location.replace(checkoutUrl);
+      return;
+      // window.location.assign(checkoutUrl);
     } catch (error) {
       console.error("[MP] Error al iniciar el pago:", error);
       toast({
@@ -372,6 +488,27 @@ const RegisterBusinessPage = () => {
     try {
       setError("");
       setIsSubmitting(true);
+      // 🔐 Si es PRO/PREMIUM y venimos con pago confirmado pero sin sesión,
+      // bloquea el submit y manda a login preservando el destino.
+      if (
+        REQUIRE_LOGIN_AFTER_PAYMENT &&
+        (selectedPlan === "pro" || selectedPlan === "premium") &&
+        isPaid &&
+        !authUser
+      ) {
+        const dest = `${location.pathname}${location.search || ""}`;
+        setIsSubmitting(false);
+        toast({
+          title: "Inicia sesión para finalizar",
+          description: "Usa el mismo correo con el que realizaste el pago.",
+        });
+        navigate(
+          `/login?redirect=${encodeURIComponent(dest)}${
+            formData.email ? `&email=${encodeURIComponent(formData.email)}` : ""
+          }`
+        );
+        return;
+      }
 
       // Construye payload sin mutar formData
       const services = Array.isArray(formData.services)
@@ -553,7 +690,8 @@ const RegisterBusinessPage = () => {
           onSubmit={handleSubmit}
           className="max-w-2xl mx-auto space-y-6 bg-white p-6 shadow rounded-lg"
         >
-          {(selectedPlan === "pro" || selectedPlan === "premium") &&
+          {REQUIRE_LOGIN_AFTER_PAYMENT &&
+            (selectedPlan === "pro" || selectedPlan === "premium") &&
             isPaid &&
             !authUser && (
               <div className="bg-amber-50 border border-amber-200 text-amber-700 p-3 rounded">

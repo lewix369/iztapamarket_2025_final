@@ -90,6 +90,36 @@
       Necesitas habilitar JavaScript para usar esta aplicación.
     </noscript>
     <div id="root"></div>
+    <!-- Mercado Pago security (Device ID for antifraud) -->
+    <script
+      src="https://www.mercadopago.com/v2/security.js"
+      view="checkout"
+      output="mpDeviceId"
+    ></script>
+    <script>
+      (function () {
+        var tries = 0;
+        var maxTries = 50; // ~5s total
+        function capture() {
+          try {
+            var did = window.mpDeviceId || window.MP_DEVICE_SESSION_ID || null;
+            if (did) {
+              window.__MP_DEVICE_ID__ = did;
+              try {
+                document.dispatchEvent(
+                  new CustomEvent("mp:device-id", { detail: { id: did } })
+                );
+              } catch (_) {}
+              return;
+            }
+          } catch (_) {}
+          if (++tries < maxTries) setTimeout(capture, 100);
+        }
+        if (document.readyState === "complete") capture();
+        else window.addEventListener("load", capture, { once: true });
+      })();
+    </script>
+    <!-- Carga de la app después del script de seguridad -->
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

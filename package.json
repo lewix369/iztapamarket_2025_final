@@ -6,7 +6,7 @@
     "node": ">=18.0.0"
   },
   "scripts": {
-    "dev:frontend": "vite --port 5173 --strictPort",
+    "dev:frontend": "vite --port 5173 --strictPort --mode sandbox",
     "dev:backend:local": "DOTENV_CONFIG_PATH=.env.local node server.mjs",
     "dev:backend": "DOTENV_CONFIG_PATH=.env.production node server.mjs",
     "dev": "concurrently -n FRONT,BACK -c green,blue \"npm run dev:frontend\" \"DOTENV_CONFIG_PATH=.env.sandbox node server.mjs\"",
@@ -15,10 +15,12 @@
     "backend": "node server.mjs",
     "start:backend": "DOTENV_CONFIG_PATH=.env.production node server.mjs",
     "start": "npm run dev",
-    "dev:clean": "pkill -f 'vercel dev' || true && pkill -f vite || true && npx vercel dev --listen=3003"
+    "dev:clean": "pkill -f 'vercel dev' || true && pkill -f vite || true && npx vercel dev --listen=3003",
+    "gen:sitemap:sandbox": "dotenv -e .env.sandbox -- node scripts/generate-sitemap.mjs",
+    "gen:sitemap:prod": "dotenv -e .env.production -- node scripts/generate-sitemap.mjs"
   },
   "dependencies": {
-    "@mercadopago/sdk-react": "^1.0.3",
+    "@mercadopago/sdk-react": "^1.0.6",
     "@radix-ui/react-alert-dialog": "^1.0.5",
     "@radix-ui/react-avatar": "^1.0.3",
     "@radix-ui/react-checkbox": "^1.0.4",
@@ -66,6 +68,7 @@
     "@vitejs/plugin-react": "^4.0.3",
     "autoprefixer": "^10.4.16",
     "concurrently": "^9.2.0",
+    "dotenv-cli": "^10.0.0",
     "eslint": "^8.57.1",
     "eslint-config-react-app": "^7.0.1",
     "postcss": "^8.4.31",

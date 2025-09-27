@@ -1,6 +1,5 @@
 // src/lib/CreatePreference.js
-// Devuelve SIEMPRE un string URL (init_point) listo para redirigir.
-// Acepta (plan, email). Soporta respuestas JSON { init_point } y también string.
+// Devuelve SIEMPRE un string URL (init_point/sandbox_init_point) listo para redirigir.
 
 export const createPreference = async (plan, email) => {
   try {
@@ -17,21 +16,23 @@ export const createPreference = async (plan, email) => {
       return null;
     }
 
-    // Normaliza el plan a "pro" | "premium"
+    // Normaliza plan
     const cleanPlanRaw = plan.toLowerCase().trim();
     const cleanPlan =
       cleanPlanRaw === "premium"
         ? "premium"
         : cleanPlanRaw === "pro" || cleanPlanRaw === "profesional"
         ? "pro"
-        : cleanPlanRaw; // deja pasar "free" si algún día se usa, pero en pagos será "pro"/"premium"
+        : cleanPlanRaw; // deja pasar "free" si algún día se usa
 
-    const payload = {
-      plan: cleanPlan,
-      email: email.trim(),
-    };
+    // Precios (ajusta si cambian)
+    const PRICE_BY_PLAN = { pro: 300, premium: 500 };
+    const price = PRICE_BY_PLAN[cleanPlan];
+    if (!price) {
+      throw new Error(`Plan inválido o sin precio configurado: ${cleanPlan}`);
+    }
 
-    // Endpoints según entorno
+    // Endpoint según entorno (usa override por env si existe)
     const ENDPOINT =
       (typeof import.meta !== "undefined" &&
         import.meta?.env?.VITE_CREATE_PREFERENCE_URL) ||
@@ -39,12 +40,25 @@ export const createPreference = async (plan, email) => {
         process?.env?.VITE_CREATE_PREFERENCE_URL) ||
       (typeof window !== "undefined" &&
       window?.location?.hostname === "localhost"
-        ? "http://localhost:3000/create_preference"
-        : "/api/createPreference");
+        ? "http://localhost:3000/api/create_preference"
+        : "/api/create_preference"); // <-- CORRECTO
+
+    const payload = {
+      title: `Plan ${cleanPlan === "pro" ? "Pro" : "Premium"}`,
+      price,
+      payer_email: email.trim(),
+      plan: cleanPlan,
+      // opcional, ayuda al webhook:
+      external_reference: `${email.trim()}|${cleanPlan}|web`,
+      // opcional: si quisieras forzar sandbox/producción desde el server, usa binary_mode en el backend
+    };
 
     const resp = await fetch(ENDPOINT, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
       body: JSON.stringify(payload),
     });
 
@@ -57,7 +71,7 @@ export const createPreference = async (plan, email) => {
 
     const data = await resp.json().catch(() => ({}));
 
-    // Prioriza init_point (producción). Si no, sandbox_init_point. Si el backend devuelve string, úsalo.
+    // Prioriza init_point (producción) y si no, sandbox_init_point (dev)
     let url =
       typeof data === "string"
         ? data
@@ -67,8 +81,7 @@ export const createPreference = async (plan, email) => {
       throw new Error("Respuesta sin init_point válido.");
     }
 
-    // ⚠️ Opcional: Propagar email/plan en la URL de MP (solo para debugging/consistencia visual).
-    // Esto NO afecta los back_urls (los define el backend).
+    // Opcional: agrega email/plan en query para tracking visual
     try {
       const u = new URL(url);
       if (!u.searchParams.get("email"))
@@ -76,7 +89,7 @@ export const createPreference = async (plan, email) => {
       if (!u.searchParams.get("plan")) u.searchParams.set("plan", cleanPlan);
       url = u.toString();
     } catch {
-      // Si falla URL(), no pasa nada — usamos la URL tal cual vino
+      /* ignore */
     }
 
     console.log("🟢 URL de pago generada:", url);

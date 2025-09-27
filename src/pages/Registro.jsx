@@ -7,14 +7,16 @@ const Registro = () => {
   const [searchParams] = useSearchParams();
   const [mpUrl, setMpUrl] = useState(null);
   const [nombre, setNombre] = useState("");
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(searchParams.get("email") || "");
   const plan = searchParams.get("plan")?.toLowerCase();
   const paid = searchParams.get("paid");
+  const mpStatus = searchParams.get("mp_status")?.toLowerCase() || null;
+  const paymentApproved = paid === "true" || mpStatus === "approved";
 
   useEffect(() => {
     const iniciarPago = async () => {
       if (plan !== "pro" && plan !== "premium") return;
-      if (paid === "true") return;
+      if (paymentApproved) return;
 
       if (!nombre || !email) {
         setMpUrl(null);
@@ -35,7 +37,7 @@ const Registro = () => {
       }
     };
     iniciarPago();
-  }, [plan, nombre, email, paid]);
+  }, [plan, nombre, email, paymentApproved]);
 
   useEffect(() => {
     console.log("✅ mpUrl actualizada:", mpUrl);
@@ -61,7 +63,7 @@ const Registro = () => {
       )}
 
       {/* PLAN PRO o PREMIUM — PASO 1: IR AL PAGO */}
-      {(plan === "pro" || plan === "premium") && paid !== "true" && (
+      {(plan === "pro" || plan === "premium") && !paymentApproved && (
         <div className="w-full max-w-2xl bg-white p-6 rounded shadow-md">
           <label className="block mb-2 font-medium">Nombre del Negocio</label>
           <input
@@ -116,7 +118,7 @@ const Registro = () => {
       )}
 
       {/* PLAN PRO o PREMIUM — PASO 2: FORMULARIO DESPUÉS DEL PAGO */}
-      {(plan === "pro" || plan === "premium") && paid === "true" && (
+      {(plan === "pro" || plan === "premium") && paymentApproved && (
         <div className="w-full max-w-4xl border p-4 rounded-md shadow-md bg-white my-6">
           <RegisterBusinessPage plan={plan} />
         </div>
