@@ -219,13 +219,12 @@ const HomePage = () => {
                   </motion.div>
 
                   <img
-                    src="/iztapamarket%20cover.png"
+                    src="/iztapamarket-cover.png"
                     alt="Avatar IztapaMarket"
                     className="h-[90%] object-contain"
                     onError={(e) => {
-                      e.target.onerror = null;
-                      e.target.src =
-                        "https://raw.githubusercontent.com/lewix369/iztapamarket_directorio_2025/main/public/iztapamarket%20cover.png";
+                      e.currentTarget.onerror = null;
+                      e.currentTarget.src = "/iztapamarket-cover.png";
                     }}
                   />
                 </motion.div>
@@ -255,8 +254,7 @@ const HomePage = () => {
                         loading="lazy"
                         onError={(e) => {
                           e.currentTarget.onerror = null;
-                          e.currentTarget.src =
-                            "https://raw.githubusercontent.com/lewix369/iztapamarket_directorio_2025/main/public/iztapamarket%20cover.png";
+                          e.currentTarget.src = "/iztapamarket-cover.png";
                         }}
                       />
                       {/* Badge Premium sobre la portada */}
