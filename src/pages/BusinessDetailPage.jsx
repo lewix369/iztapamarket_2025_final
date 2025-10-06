@@ -140,7 +140,7 @@ const LightboxGallery = ({ images = [], title = "Galería" }) => {
                   width="800"
                   height="600"
                   loading={i < 2 ? "eager" : "lazy"}
-                  fetchpriority={i === 0 ? "high" : "auto"}
+                  fetchPriority={i === 0 ? "high" : "auto"}
                   decoding="async"
                   onError={(e) => (e.currentTarget.style.display = "none")}
                 />
@@ -170,7 +170,7 @@ const LightboxGallery = ({ images = [], title = "Galería" }) => {
                 width="640"
                 height="360"
                 loading={i < 2 ? "eager" : "lazy"}
-                fetchpriority={i === 0 ? "high" : "auto"}
+                fetchPriority={i === 0 ? "high" : "auto"}
                 decoding="async"
                 onError={(e) => (e.currentTarget.style.display = "none")}
               />

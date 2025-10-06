@@ -20,7 +20,7 @@ import cors from "cors";
 import { createClient } from "@supabase/supabase-js";
 
 // 3) Router del webhook (tu handler robusto ya vive ahí)
-import webhookMpRouter from "./src/lib/api/routes/webhookMercadoPago.mjs";
+import webhookMpRouter from "./src/lib/api/routes/webhook_mp.mjs";
 
 // 4) App base
 const app = express();
@@ -43,7 +43,7 @@ const supabase =
 
 // 7) Crear preferencia de Mercado Pago (server-side)
 //    Usa la `notification_url` del body si viene (para túneles), si no usa env.
-app.post("/api/create_preference", async (req, res) => {
+const createPreferenceHandler = async (req, res) => {
   try {
     const {
       title = "Plan Premium",
@@ -119,7 +119,13 @@ app.post("/api/create_preference", async (req, res) => {
     console.error("[/api/create_preference] Exception:", err?.message || err);
     return res.status(500).json({ error: "Fallo al crear preferencia" });
   }
-});
+};
+
+// Montar la misma lógica en varias rutas compatibles con el frontend
+app.post("/api/create_preference", createPreferenceHandler); // legacy con guion_bajo
+app.post("/api/create-preference", createPreferenceHandler); // preferida
+app.post("/api/mp/create-preference", createPreferenceHandler); // probada por MPWalletButton
+app.post("/api/mercadopago/create-preference", createPreferenceHandler);
 
 // 8) Sitemap dinámico (SEO) — usa Supabase anon si está configurado
 app.get("/api/sitemap", async (req, res) => {
@@ -288,6 +294,33 @@ app.get("/sitemap.xml", (_req, res) => {
 // 9) Monta tu router del Webhook de Mercado Pago
 //    (tu router ya hace express.json y toda la lógica robusta)
 app.use("/webhook_mp", webhookMpRouter);
+
+// ✅ Endpoint de diagnóstico rápido
+app.get("/diag", (req, res) => {
+  res.json({
+    ok: true,
+    version: "2025-10-05",
+    env: {
+      NODE_ENV: process.env.NODE_ENV,
+      MP_ENV: process.env.MP_ENV,
+    },
+    base_urls: {
+      public: process.env.PUBLIC_BASE_URL,
+      webhook: process.env.MP_WEBHOOK_URL,
+    },
+    mp: {
+      hasAccessToken: !!process.env.MP_ACCESS_TOKEN,
+      hasWebhookSecret: !!process.env.MP_WEBHOOK_SECRET,
+    },
+    supabase: {
+      hasURL: !!process.env.SUPABASE_URL,
+      hasAnonKey: !!process.env.SUPABASE_ANON_KEY,
+      hasServiceRole:
+        !!process.env.SUPABASE_SERVICE_ROLE ||
+        !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+    },
+  });
+});
 
 // 10) 404 (después de TODAS las rutas)
 app.use((req, res) => res.status(404).json({ ok: false, error: "Not Found" }));

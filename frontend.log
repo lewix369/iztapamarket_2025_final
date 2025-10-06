@@ -1,9 +1,0 @@
-
-> iztapamarket@1.0.0 dev:frontend
-> vite --port 5173 --strictPort
-
-
-  VITE v4.5.14  ready in 179 ms
-
-  ➜  Local:   http://localhost:5173/
-  ➜  Network: http://192.168.1.97:5173/

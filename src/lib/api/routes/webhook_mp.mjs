@@ -43,22 +43,42 @@ if (!process.env.MP_ACCESS_TOKEN) {
   }
 }
 
-/* ── Supabase (Service Role – SOLO backend) ──────────────────── */
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE || process.env.SUPABASE_SERVICE_ROLE_KEY,
-  { auth: { persistSession: false } }
-);
+/* ── Supabase (Service Role – SOLO backend) — lazy init to evitar crash si faltan ENVs ─ */
+let __sb = null;
+function getSupabase() {
+  if (__sb) return __sb;
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
+  const key =
+    process.env.SUPABASE_SERVICE_ROLE ||
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    "";
+  if (!url || !key) {
+    console.warn(
+      "[webhook_mp] SUPABASE_URL/SUPABASE_SERVICE_ROLE faltan; se omite actualización en DB."
+    );
+    return null;
+  }
+  try {
+    __sb = createClient(url, key, { auth: { persistSession: false } });
+  } catch (e) {
+    console.error("[webhook_mp] createClient error:", e?.message || e);
+    __sb = null;
+  }
+  return __sb;
+}
 
 /* ── Helpers de base de datos ────────────────────────────────── */
 async function updatePlanByEmail(email, plan) {
   if (!email || !plan) return { ok: false, error: "email/plan faltan" };
+  const sb = getSupabase();
+  if (!sb) return { ok: false, error: "supabase_not_configured" };
+
   const payload = {
     email: String(email).toLowerCase(),
     plan_type: String(plan).toLowerCase(),
     updated_at: new Date().toISOString(),
   };
-  const { data, error } = await supabase
+  const { data, error } = await sb
     .from("profiles")
     .upsert(payload, { onConflict: "email" })
     .select("email, plan_type, updated_at")
@@ -67,15 +87,17 @@ async function updatePlanByEmail(email, plan) {
   return { ok: true, data };
 }
 
-// Crea/actualiza negocio por email SIN requerir UNIQUE(owner_email)
 async function upsertBusinessByEmail({ email, plan, external_reference }) {
   const owner_email = String(email || "").toLowerCase();
   const plan_type = String(plan || "premium").toLowerCase();
   const now = new Date().toISOString();
   if (!owner_email) return { ok: false, error: "owner_email faltante" };
 
+  const sb = getSupabase();
+  if (!sb) return { ok: false, error: "supabase_not_configured" };
+
   // 1) buscar si ya existe
-  const { data: existing, error: qErr } = await supabase
+  const { data: existing, error: qErr } = await sb
     .from("negocios")
     .select("id, owner_email")
     .eq("owner_email", owner_email)
@@ -85,7 +107,7 @@ async function upsertBusinessByEmail({ email, plan, external_reference }) {
 
   if (existing?.id) {
     // 2) actualizar
-    const { data, error } = await supabase
+    const { data, error } = await sb
       .from("negocios")
       .update({
         plan_type,
@@ -103,7 +125,7 @@ async function upsertBusinessByEmail({ email, plan, external_reference }) {
   }
 
   // 3) insertar
-  const { data, error } = await supabase
+  const { data, error } = await sb
     .from("negocios")
     .insert({
       owner_email,
@@ -189,8 +211,31 @@ router.all("/__version", (_req, res) => {
   res.json({ ok: true, version: "2025-09-18_02" });
 });
 
+// Diagnóstico rápido de ENVs en Vercel
+router.get("/__env", (_req, res) => {
+  const fp = (v = "") =>
+    v ? `${String(v).slice(0, 6)}…${String(v).slice(-4)}` : null;
+  res.json({
+    ok: true,
+    env: {
+      MP_ACCESS_TOKEN: !!process.env.MP_ACCESS_TOKEN,
+      SUPABASE_URL: !!(
+        process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
+      ),
+      SUPABASE_SERVICE_ROLE: !!(
+        process.env.SUPABASE_SERVICE_ROLE ||
+        process.env.SUPABASE_SERVICE_ROLE_KEY
+      ),
+      MP_WEBHOOK_SECRET: !!process.env.MP_WEBHOOK_SECRET,
+      fingerprints: {
+        MP_ACCESS_TOKEN: fp(process.env.MP_ACCESS_TOKEN || ""),
+      },
+    },
+  });
+});
+
 /* ── Ping / prueba manual (?test=1) ──────────────────────────── */
-router.all("/", async (req, res) => {
+router.get("/", async (req, res) => {
   if (req.query?.test) {
     const { data } = req.body || {};
     if (data?.status && data?.metadata?.email) {

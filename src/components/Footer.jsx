@@ -1,15 +1,7 @@
 import React from "react";
 import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
-import {
-  Store,
-  Mail,
-  Phone,
-  MapPin,
-  Facebook,
-  Instagram,
-  Twitter,
-} from "lucide-react";
+import { Store, Mail, Phone, MapPin, Facebook, Instagram } from "lucide-react";
 
 const CONTACT_PHONE = import.meta.env.VITE_CONTACT_PHONE || "+52 56 5306 9259";
 const CONTACT_PHONE_DIGITS = CONTACT_PHONE.replace(/\D+/g, "");

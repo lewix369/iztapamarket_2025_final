@@ -1,7 +1,8 @@
 // src/pages/Checkout.jsx
 import React, { useEffect } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import MPWalletButton from "@/components/MPWalletButton";
+
+const CONTACT_PHONE = import.meta.env.VITE_CONTACT_PHONE || "+52 56 5306 9259";
 
 /**
  * Página mínima de checkout.
@@ -26,6 +27,13 @@ const Checkout = () => {
   ).trim();
   const userId = localStorage.getItem("reg_user_id") || null;
 
+  const whatsappLink = `https://wa.me/${CONTACT_PHONE.replace(
+    /\D+/g,
+    ""
+  )}?text=${encodeURIComponent(
+    `Hola, quiero pagar el plan ${plan} para ${email} (IztapaMarket).`
+  )}`;
+
   useEffect(() => {
     // Si no hay email, regresamos a login con redirect a /checkout
     if (!email) {
@@ -43,7 +51,21 @@ const Checkout = () => {
     <main className="flex items-center justify-center h-screen">
       <div style={{ width: 320 }}>
         <h1 className="text-xl mb-4">Pagar suscripción {plan}</h1>
-        <MPWalletButton plan={plan} email={email} userId={userId} />
+        {/* Placeholder temporal mientras se integra MPWalletButton */}
+        <div className="space-y-3 rounded-md border border-yellow-500 p-4 bg-yellow-50 text-yellow-900">
+          <p className="text-sm">
+            Falta el componente <code>MPWalletButton</code> o su alias. Puedes
+            completar el pago contactándonos por WhatsApp.
+          </p>
+          <a
+            href={whatsappLink}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center justify-center rounded bg-green-600 px-4 py-2 text-white hover:bg-green-700"
+          >
+            Abrir WhatsApp
+          </a>
+        </div>
       </div>
     </main>
   );
