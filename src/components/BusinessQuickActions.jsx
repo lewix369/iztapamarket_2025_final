@@ -51,7 +51,7 @@ export default function BusinessQuickActions({ business }) {
         <a
           href={ensureWa(whatsapp)}
           target="_blank"
-          rel="noopener"
+          rel="noopener noreferrer"
           aria-label="WhatsApp"
         >
           <Button variant="secondary" className="gap-2">
@@ -79,7 +79,7 @@ export default function BusinessQuickActions({ business }) {
         <a
           href={delivery_url}
           target="_blank"
-          rel="noopener nofollow"
+          rel="noopener nofollow noreferrer"
           aria-label="Entrega a domicilio"
           onClick={handleDeliveryClick}
         >

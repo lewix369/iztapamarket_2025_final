@@ -38,8 +38,6 @@ import PaySuccess from "@/pages/PaySuccess";
 import PayFailure from "@/pages/PayFailure";
 import PayPending from "@/pages/PayPending";
 import Checkout from "@/pages/Checkout";
-import PlanCheckout from "@/components/PlanCheckout";
-import PlanesTest from "@/pages/PlanesTest";
 
 function RedirectRegisterBusiness() {
   // Mantén todos los query params (plan, email, status, etc.)
@@ -83,7 +81,6 @@ function Layout() {
           <Route path="/negocio/:slug" element={<BusinessDetailPage />} />
           <Route path="/precios" element={<Precios />} />
           <Route path="/planes" element={<Precios />} />
-          <Route path="/planes-test" element={<PlanesTest />} />
           <Route path="/checkout" element={<Checkout />} />
           <Route path="/pago/success" element={<PaySuccess />} />
           <Route path="/pago/failure" element={<PayFailure />} />
