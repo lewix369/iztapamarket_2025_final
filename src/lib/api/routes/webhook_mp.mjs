@@ -235,7 +235,7 @@ router.get("/__env", (_req, res) => {
 });
 
 /* ── Ping / prueba manual (?test=1) ──────────────────────────── */
-router.all("/", async (req, res) => {
+router.get("/", async (req, res) => {
   if (req.query?.test) {
     const { data } = req.body || {};
     if (data?.status && data?.metadata?.email) {
