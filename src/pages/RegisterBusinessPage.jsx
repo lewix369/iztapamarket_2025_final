@@ -19,11 +19,9 @@ import "react-toastify/dist/ReactToastify.css";
 // --- Mercado Pago Device ID helper (from security.js) ---
 function getMpDeviceId() {
   try {
-    // Prefer explicit memoized value if we already captured it
     if (typeof window !== "undefined" && window.__MP_DEVICE_ID) {
       return window.__MP_DEVICE_ID;
     }
-    // Standard global set by the security script
     const g =
       (typeof window !== "undefined" &&
         (window.MP_DEVICE_SESSION_ID || window.deviceId)) ||
@@ -32,7 +30,6 @@ function getMpDeviceId() {
       window.__MP_DEVICE_ID = g;
       return g;
     }
-    // Optional: element <input id="deviceID" value="..." /> if integrator set it
     const el =
       typeof document !== "undefined"
         ? document.getElementById("deviceID")
@@ -146,6 +143,9 @@ const RegisterBusinessPage = () => {
     autoParam === "1" || autoParam === "true" || autoParam === "yes";
 
   const emailFromUrl = (searchParams.get("email") || "").trim();
+  const localEmail = (typeof window !== "undefined" && window.localStorage)
+    ? (localStorage.getItem("reg_email") || "")
+    : "";
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -182,7 +182,7 @@ const RegisterBusinessPage = () => {
       const mpBase = (import.meta.env.VITE_MP_BASE || "").replace(/\/$/, "");
       const isAbs = /^https?:\/\//i.test(envUrl);
       if (isAbs) return envUrl;
-      if (mpBase) return `${mpBase}/create_preference_v2`;
+      if (mpBase) return `${mpBase}/create_preference`;
       if (envUrl) {
         const base = (
           typeof window !== "undefined" ? window.location.origin : ""
@@ -192,7 +192,7 @@ const RegisterBusinessPage = () => {
       const base = (
         typeof window !== "undefined" ? window.location.origin : ""
       ).replace(/\/$/, "");
-      return `${base}/api/create_preference_v2`;
+      return `${base}/api/create_preference`;
     }
     console.debug("[Registro] mount", {
       selectedPlan,
@@ -234,12 +234,13 @@ const RegisterBusinessPage = () => {
     ]);
   }, []);
 
-  // Prefill email si vino en la URL
+  // Prefill email si vino en la URL o está en localStorage (guardando valores inválidos)
   useEffect(() => {
-    if (emailFromUrl) {
-      setFormData((prev) => ({ ...prev, email: emailFromUrl }));
+    const candidate = (emailFromUrl || localEmail || "").trim();
+    if (candidate && candidate !== "null" && candidate !== "undefined") {
+      setFormData((prev) => ({ ...prev, email: candidate }));
     }
-  }, [emailFromUrl]);
+  }, [emailFromUrl, localEmail]);
 
   useEffect(() => {
     return () => {
@@ -248,6 +249,31 @@ const RegisterBusinessPage = () => {
   }, [previewUrl]);
 
   // ⛔️ (El guard de forzar /crear-cuenta fue quitado intencionalmente)
+
+  // 🔗 Navegación centralizada post-registro (premium/pro): ir a /mi-negocio o forzar login con redirect
+  const goToBusiness = (emailMaybe) => {
+    const fallbackLocal =
+      (typeof window !== "undefined" && window.localStorage)
+        ? (localStorage.getItem("reg_email") || "")
+        : "";
+    let emailFinal = (
+      (emailMaybe ?? formData.email ?? emailFromUrl ?? fallbackLocal ?? "")
+    ).toString().trim();
+
+    if (emailFinal === "null" || emailFinal === "undefined") {
+      emailFinal = "";
+    }
+
+    if (authUser?.id) {
+      navigate("/mi-negocio");
+    } else {
+      navigate(
+        `/login?redirect=${encodeURIComponent("/mi-negocio")}${
+          emailFinal ? `&email=${encodeURIComponent(emailFinal)}` : ""
+        }`
+      );
+    }
+  };
 
   // 🆕 Auto-inicio de Mercado Pago si venimos de crear-cuenta con ?auto=1
   useEffect(() => {
@@ -388,35 +414,32 @@ const RegisterBusinessPage = () => {
     }
 
     try {
-      // 📍 Resolver robusto del endpoint:
-      // 1) Si VITE_CREATE_PREFERENCE_URL es ABSOLUTO (http/https), úsalo tal cual.
-      // 2) Si hay VITE_MP_BASE, construimos `${MP_BASE}/create_preference_v2`.
-      // 3) Si VITE_CREATE_PREFERENCE_URL es relativo o no existe, usamos
-      //    `${window.location.origin}/api/create_preference_v2` como último recurso.
+      // 📍 Resolver robusto del endpoint (sin _v2)
       function resolveCreatePrefUrl() {
         const envUrl = (
           import.meta.env.VITE_CREATE_PREFERENCE_URL || ""
         ).trim();
         const mpBase = (import.meta.env.VITE_MP_BASE || "").replace(/\/$/, "");
 
-        const isAbs = /^https?:\/\//i.test(envUrl);
-        if (isAbs) return envUrl;
+        // absoluta => usar tal cual
+        if (/^https?:\/\//i.test(envUrl)) return envUrl;
 
-        if (mpBase) return `${mpBase}/create_preference_v2`;
+        // si hay MP_BASE => /create_preference
+        if (mpBase) return `${mpBase}/create_preference`;
 
+        // relativa => resolver contra origin
         if (envUrl) {
-          // si vino relativo (e.g. "/api/create_preference_v2"), respétalo contra el origin
           const base = (
             typeof window !== "undefined" ? window.location.origin : ""
           ).replace(/\/$/, "");
           return `${base}${envUrl.startsWith("/") ? "" : "/"}${envUrl}`;
         }
 
-        // ultra‑fallback
+        // fallback final
         const base = (
           typeof window !== "undefined" ? window.location.origin : ""
         ).replace(/\/$/, "");
-        return `${base}/api/create_preference_v2`;
+        return `${base}/api/create_preference`;
       }
 
       const endpoint = resolveCreatePrefUrl();
@@ -443,13 +466,9 @@ const RegisterBusinessPage = () => {
       });
 
       const data = await resp.json().catch(() => ({}));
-      const preferInitPoint =
-        (import.meta.env.VITE_FORCE_MP_INIT_POINT || "")
-          .toString()
-          .toLowerCase() === "true";
-      const checkoutUrl = preferInitPoint
-        ? data?.init_point || data?.checkout_url || data?.sandbox_init_point
-        : data?.checkout_url || data?.sandbox_init_point || data?.init_point;
+
+      // Siempre usa el checkout real (init_point). Evita sandbox_init_point.
+      const checkoutUrl = data?.init_point || data?.checkout_url;
 
       if (!resp.ok || !checkoutUrl) {
         const msg =
@@ -471,7 +490,6 @@ const RegisterBusinessPage = () => {
       } catch {}
       window.location.replace(checkoutUrl);
       return;
-      // window.location.assign(checkoutUrl);
     } catch (error) {
       console.error("[MP] Error al iniciar el pago:", error);
       toast({
@@ -502,11 +520,16 @@ const RegisterBusinessPage = () => {
           title: "Inicia sesión para finalizar",
           description: "Usa el mismo correo con el que realizaste el pago.",
         });
-        navigate(
-          `/login?redirect=${encodeURIComponent(dest)}${
-            formData.email ? `&email=${encodeURIComponent(formData.email)}` : ""
-          }`
-        );
+        {
+          const e = (formData.email || localEmail || "").trim();
+          const safeEmail =
+            e && e !== "null" && e !== "undefined" ? e : "";
+          navigate(
+            `/login?redirect=${encodeURIComponent(dest)}${
+              safeEmail ? `&email=${encodeURIComponent(safeEmail)}` : ""
+            }`
+          );
+        }
         return;
       }
 
@@ -563,23 +586,76 @@ const RegisterBusinessPage = () => {
           is_approved: true,
         };
 
-        const { error } = await supabase.from("negocios").insert([newBusiness]);
-        if (error) throw error;
+        // Intento normal de inserción
+        const { data: row, error } = await supabase
+          .from("negocios")
+          .insert([newBusiness])
+          .select("id, slug")
+          .single();
 
-        toast({
-          title: "Registro exitoso",
-          description: "Tu negocio ha sido registrado correctamente.",
-        });
-        navigate("/registro-free-success");
+        // Si inserta sin problemas, navegamos directo
+        if (!error && row) {
+          toast({
+            title: "Registro exitoso",
+            description: "Tu negocio ha sido registrado correctamente.",
+          });
+          navigate(`/registro/exitoso?slug=${encodeURIComponent(row.slug)}`);
+          return;
+        }
+
+        // ⚠️ Duplicado por índice único de FREE (nombre + dirección)
+        const isDup =
+          error && (
+            error.code === "409" ||
+            error.code === "23505" ||
+            /duplicate key value/i.test(error.message || "") ||
+            /negocios_free_name_addr_uidx/i.test(error.message || "")
+          );
+
+        if (isDup) {
+          // Buscar el registro existente por nombre/dirección/plan_type
+          const { data: existing } = await supabase
+            .from("negocios")
+            .select("id, slug")
+            .eq("plan_type", "free")
+            .ilike("nombre", formData.nombre)
+            .ilike("direccion", formData.direccion)
+            .maybeSingle();
+
+          if (existing?.slug) {
+            toastify.success("✅ Ya existía un registro con ese nombre y dirección.");
+            navigate(`/registro/exitoso?slug=${encodeURIComponent(existing.slug)}`);
+            return;
+          }
+
+          // Fallback: si no se pudo localizar por nombre/dirección, intentamos por slug recién calculado
+          const { data: bySlug } = await supabase
+            .from("negocios")
+            .select("id, slug")
+            .eq("slug", slug)
+            .maybeSingle();
+
+          if (bySlug?.slug) {
+            toastify.success("✅ Ya existía un registro coincidente.");
+            navigate(`/registro/exitoso?slug=${encodeURIComponent(bySlug.slug)}`);
+            return;
+          }
+
+        }
+
+        // Si no fue duplicado (u otro error), propagamos al catch general
+        if (error) throw error;
       } else if (selectedPlan === "pro" || selectedPlan === "premium") {
-        const userId = authUser?.id || null;
+        const userId = authUser?.id ?? null; // null si no hay sesión
 
         const effectiveEmail = (
           formData.email ||
           emailFromUrl ||
           authUser?.email ||
           ""
-        ).trim();
+        )
+          .trim()
+          .toLowerCase();
 
         const baseSlug = generateSlug(formData.nombre || "");
         const uniqueSlug = await getUniqueSlug(
@@ -605,38 +681,126 @@ const RegisterBusinessPage = () => {
           is_approved: true,
         };
 
-        // Insert con reintento por colisión de slug
-        let insertError = null;
-        let attempt = 0;
-        let currentSlug = uniqueSlug;
-        while (attempt < 2) {
-          const { error } = await supabase
+        const normalizedEffectiveEmail =
+          (effectiveEmail || "").toLowerCase() || null;
+
+        // 🔐 RLS-safe write
+        if (userId) {
+          const { data: row, error } = await supabase
             .from("negocios")
-            .insert([{ ...newBusiness, slug: currentSlug }]);
-          if (!error) {
-            insertError = null;
-            break;
+            .upsert(
+              [{ ...newBusiness, email: normalizedEffectiveEmail }],
+              { onConflict: "user_id", ignoreDuplicates: false }
+            )
+            .select()
+            .single();
+
+          if (error) throw error;
+        } else {
+          const insertRes = await supabase
+            .from("negocios")
+            .insert([{ ...newBusiness, email: normalizedEffectiveEmail }])
+            .select()
+            .maybeSingle();
+
+          if (insertRes?.data && !insertRes.error) {
+            toast({
+              title: "Registro exitoso",
+              description: "Tu negocio ha sido registrado correctamente.",
+            });
+            goToBusiness(normalizedEffectiveEmail);
+            return;
           }
-          if (error.code === "23505" && /slug/i.test(error.message || "")) {
-            currentSlug = await getUniqueSlug(baseSlug);
-            attempt++;
-            continue;
+
+          const dup = insertRes?.error;
+          if (
+            dup &&
+            (dup.code === "409" ||
+              dup.code === "23505" ||
+              /duplicate key value/i.test(dup.message || ""))
+          ) {
+            const fetchRes = await supabase
+              .from("negocios")
+              .select("*")
+              .eq("email", normalizedEffectiveEmail)
+              .maybeSingle();
+
+            if (fetchRes?.data && !fetchRes.error) {
+              toast({
+                title: "Registro existente",
+                description:
+                  "Ya tenías un negocio con ese correo. Usaremos ese registro.",
+              });
+              goToBusiness(normalizedEffectiveEmail);
+              return;
+            }
+
+            if (fetchRes.error) throw fetchRes.error;
           }
-          insertError = error;
-          break;
+
+          if (insertRes.error) throw insertRes.error;
         }
-        if (insertError) throw insertError;
 
         toast({
           title: "Registro exitoso",
           description: "Tu negocio ha sido registrado correctamente.",
         });
-
-        if (userId) navigate("/mi-negocio");
-        else navigate("/");
+        goToBusiness(normalizedEffectiveEmail);
       }
     } catch (err) {
       console.error("Error al registrar negocio:", err?.message || err);
+      if (
+        err?.code === "409" ||
+        err?.code === "23505" ||
+        /duplicate key value/i.test(err?.message || "")
+      ) {
+        try {
+          const normalizedEmail = (
+            formData.email || emailFromUrl || authUser?.email || ""
+          ).toLowerCase();
+          const fetchRes = await supabase
+            .from("negocios")
+            .select("*")
+            .eq("email", normalizedEmail)
+            .maybeSingle();
+
+          if (fetchRes?.data && !fetchRes.error) {
+            toastify.success(
+              "✅ Ya existe un negocio con ese correo. Usaremos ese registro."
+            );
+            goToBusiness(normalizedEmail);
+            return;
+          }
+        } catch (readErr) {
+          console.error(
+            "Error leyendo negocio existente tras duplicado:",
+            readErr
+          );
+        }
+      }
+      // FREE: si falló por duplicado (nombre+dirección), redirige a exitoso usando el existente
+      if (
+        selectedPlan === "free" &&
+        (err?.code === "409" || err?.code === "23505" || /negocios_free_name_addr_uidx|duplicate key value/i.test(err?.message || ""))
+      ) {
+        try {
+          const { data: existing } = await supabase
+            .from("negocios")
+            .select("id, slug")
+            .eq("plan_type", "free")
+            .ilike("nombre", formData.nombre)
+            .ilike("direccion", formData.direccion)
+            .maybeSingle();
+
+          if (existing?.slug) {
+            toastify.success("✅ Ya existía un registro con ese nombre y dirección.");
+            navigate(`/registro/exitoso?slug=${encodeURIComponent(existing.slug)}`);
+            return;
+          }
+        } catch (e2) {
+          console.error("FREE duplicate fallback read failed:", e2);
+        }
+      }
       setError("Ocurrió un error al registrar el negocio.");
     } finally {
       setIsSubmitting(false);

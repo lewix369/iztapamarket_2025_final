@@ -59,6 +59,20 @@ if (import.meta.env.PROD && "serviceWorker" in navigator) {
       .register("/service-worker.js")
       .then((registration) => {
         console.log("✅ Service Worker registrado (prod):", registration);
+        // ⚡ Asegura que el SW busque actualizaciones inmediatamente tras cada deploy
+        try {
+          registration.update();
+        } catch (_) {}
+
+        // ♻️ Cuando el nuevo SW toma control, recarga una vez para evitar assets viejos
+        let refreshing = false;
+        navigator.serviceWorker.addEventListener("controllerchange", () => {
+          if (refreshing) return;
+          refreshing = true;
+          try {
+            window.location.reload();
+          } catch (_) {}
+        });
       })
       .catch((error) => {
         console.error("❌ Error al registrar el Service Worker:", error);

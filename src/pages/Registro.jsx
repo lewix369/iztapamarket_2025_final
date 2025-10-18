@@ -1,20 +1,53 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
-import { createPreference } from "@/services/createPreference";
 import RegisterBusinessPage from "@/components/RegisterBusinessPage";
 
+/**
+ * Registro.jsx
+ * - Unifica el flujo con PaySuccess.jsx
+ * - Genera la preferencia desde el backend v2 ENVIANDO email/plan
+ * - Marca pago aprobado cuando paid=approved o mp_status=approved
+ * - Persiste nombre/email en localStorage para que PaySuccess/Registro lean esos datos
+ */
 const Registro = () => {
   const [searchParams] = useSearchParams();
+
+  // UI state
   const [mpUrl, setMpUrl] = useState(null);
   const [nombre, setNombre] = useState("");
   const [email, setEmail] = useState(searchParams.get("email") || "");
-  const plan = searchParams.get("plan")?.toLowerCase();
-  const paid = searchParams.get("paid");
-  const mpStatus = searchParams.get("mp_status")?.toLowerCase() || null;
-  const paymentApproved = paid === "true" || mpStatus === "approved";
 
+  const plan = searchParams.get("plan")?.toLowerCase();
+  const paidParam = (searchParams.get("paid") || "").toLowerCase();
+  const mpStatus = (searchParams.get("mp_status") || "").toLowerCase();
+
+  // Acepta múltiples variantes para "aprobado"
+  const paymentApproved = useMemo(() => {
+    const truthy = new Set(["true", "1", "yes", "approved", "ok"]);
+    return truthy.has(paidParam) || mpStatus === "approved";
+  }, [paidParam, mpStatus]);
+
+  // Helper: base del backend para llamar /api/create_preference_v2
+  const API_BASE = useMemo(() => {
+    // VITE_MP_BASE puede apuntar a dominio (sin /api)
+    const b = (import.meta.env.VITE_MP_BASE || "").replace(/\/$/, "");
+    return b || "";
+  }, []);
+
+  // Guarda progreso para que PaySuccess/Registro puedan leerlo
   useEffect(() => {
-    const iniciarPago = async () => {
+    try {
+      if (email) localStorage.setItem("correo_negocio", email.toLowerCase());
+      if (nombre) localStorage.setItem("nombre_negocio", nombre);
+      if (plan) localStorage.setItem("reg_plan", plan);
+    } catch {}
+  }, [email, nombre, plan]);
+
+  // Genera enlace de pago SOLO para pro/premium y si aún no está aprobado
+  useEffect(() => {
+    let cancelled = false;
+
+    async function iniciarPago() {
       if (plan !== "pro" && plan !== "premium") return;
       if (paymentApproved) return;
 
@@ -24,29 +57,56 @@ const Registro = () => {
       }
 
       try {
-        const preferenceUrl = await createPreference(
-          `Plan ${plan}`,
-          plan === "premium" ? 299 : 149,
-          1
-        );
-        setMpUrl(preferenceUrl);
-        console.log(preferenceUrl);
+        // Precio por plan (puedes ajustar; el backend también puede sobrescribir)
+        const unit_price = 10; // TEMP: precio de prueba MXN 10 (revertir a 149/299 para producción)
+
+        // Usa el endpoint del backend que ya validamos por curl
+        const url = `${API_BASE}/api/create_preference_v2`;
+        const res = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify({
+            email,
+            plan,
+            unit_price,
+            title: `Suscripción ${plan}`,
+            quantity: 1,
+          }),
+        });
+
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok || !j?.init_point) {
+          console.error("❌ Error creando preferencia:", j);
+          setMpUrl(null);
+          return;
+        }
+
+        if (!cancelled) setMpUrl(j.init_point);
+        console.log("🧾 init_point:", j.init_point);
       } catch (error) {
         console.error("❌ Error generando preferencia de pago:", error);
         setMpUrl(null);
       }
-    };
-    iniciarPago();
-  }, [plan, nombre, email, paymentApproved]);
+    }
 
+    iniciarPago();
+    return () => {
+      cancelled = true;
+    };
+  }, [API_BASE, plan, nombre, email, paymentApproved]);
+
+  // UX: log del enlace
   useEffect(() => {
-    console.log("✅ mpUrl actualizada:", mpUrl);
+    if (mpUrl) console.log("✅ mpUrl actualizada:", mpUrl);
   }, [mpUrl]);
 
   return (
     <main className="flex flex-col items-center justify-center min-h-screen p-6">
       <h1 className="text-3xl font-bold mb-4 text-center capitalize">
-        Registro de Plan: {plan}
+        Registro de Plan: {plan || "(sin plan)"}
       </h1>
 
       {/* PLAN FREE */}
@@ -82,6 +142,7 @@ const Registro = () => {
             onChange={(e) => setEmail(e.target.value)}
             placeholder="ejemplo@correo.com"
           />
+
           {(!nombre || !email) && (
             <p className="text-sm text-red-600">
               ⚠️ Ingresa nombre y correo para generar el enlace de pago.
@@ -96,14 +157,7 @@ const Registro = () => {
               Completa nombre y correo
             </button>
           ) : !mpUrl ? (
-            <>
-              <p className="text-gray-500">Generando enlace de pago...</p>
-              {mpUrl && (
-                <p className="text-green-600 break-all text-sm mt-2">
-                  URL generada: {mpUrl}
-                </p>
-              )}
-            </>
+            <p className="text-gray-500">Generando enlace de pago…</p>
           ) : (
             <a
               href={mpUrl}
