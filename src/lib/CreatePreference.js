@@ -26,7 +26,7 @@ export const createPreference = async (plan, email) => {
         : cleanPlanRaw; // deja pasar "free" si algún día se usa
 
     // Precios (ajusta si cambian)
-    const PRICE_BY_PLAN = { pro: 300, premium: 500 };
+    const PRICE_BY_PLAN = { pro: 50, premium: 50 };
     const price = PRICE_BY_PLAN[cleanPlan];
     if (!price) {
       throw new Error(`Plan inválido o sin precio configurado: ${cleanPlan}`);
