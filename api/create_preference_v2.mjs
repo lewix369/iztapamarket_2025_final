@@ -46,7 +46,7 @@ export default async function createPreferenceV2(accessToken, body, diag, res) {
       });
     }
 
-    const PRICE_BY_PLAN = { pro: 300, premium: 500 };
+    const PRICE_BY_PLAN = { pro: 50, premium: 50 };
     const unitPrice = PRICE_BY_PLAN[plan];
 
     const title = `Plan ${plan === "pro" ? "Pro" : "Premium"} - IztapaMarket`;
