@@ -112,7 +112,12 @@ const RegisterBusinessPage = () => {
   const [searchParams] = useSearchParams();
 
   // ✅ Plan y estado de pago (normalizado)
-  const selectedPlan = normalizePlan(searchParams.get("plan") || "free");
+  const savedPlan = (typeof window !== "undefined" && window.localStorage)
+    ? (localStorage.getItem("reg_plan") || "")
+    : "";
+  const selectedPlan = normalizePlan(
+    searchParams.get("plan") || savedPlan || "free"
+  );
   const rawStatus = (
     searchParams.get("collection_status") ||
     searchParams.get("status") ||
@@ -174,6 +179,21 @@ const RegisterBusinessPage = () => {
 
   const [authUser, setAuthUser] = useState(null);
   const [autoTriggered, setAutoTriggered] = useState(false); // 🆕 evita múltiples disparos
+
+  // 🎯 Corrección: si el email de sesión NO coincide con el email del checkout, avisar y permitir cambiar de cuenta
+  const intendedEmail = (
+    (formData.email || emailFromUrl || localEmail || "").toString().trim().toLowerCase()
+  );
+  const sessionEmail = (authUser?.email || "").toString().trim().toLowerCase();
+  const emailMismatch = Boolean(intendedEmail && sessionEmail && intendedEmail !== sessionEmail);
+
+  const switchAccountToIntended = async () => {
+    try {
+      await supabase.auth.signOut();
+    } catch {}
+    const dest = `${location.pathname}${location.search || ""}`;
+    navigate(`/login?redirect=${encodeURIComponent(dest)}${intendedEmail ? `&email=${encodeURIComponent(intendedEmail)}` : ""}`);
+  };
 
   useEffect(() => {
     // Log básico para verificar flags/endpoint y device id (solo en dev)
@@ -276,6 +296,71 @@ const RegisterBusinessPage = () => {
   };
 
   // 🆕 Auto-inicio de Mercado Pago si venimos de crear-cuenta con ?auto=1
+  // 🔐 Gate: pago aprobado pero sin sesión
+  const mustLoginToFinish =
+    REQUIRE_LOGIN_AFTER_PAYMENT &&
+    (selectedPlan === "pro" || selectedPlan === "premium") &&
+    isPaid &&
+    !authUser;
+
+  const goLoginToFinish = () => {
+    const shouldGoToBusiness = (selectedPlan === "pro" || selectedPlan === "premium") && isPaid;
+    const dest = shouldGoToBusiness ? "/mi-negocio" : `${location.pathname}${location.search || ""}`;
+    const e = (formData.email || localEmail || "").trim();
+    const safeEmail = e && e !== "null" && e !== "undefined" ? e : "";
+    navigate(
+      `/login?redirect=${encodeURIComponent(dest)}${
+        safeEmail ? `&email=${encodeURIComponent(safeEmail)}` : ""
+      }`
+    );
+  };
+  // ⛳️ Auto-redirect suave si venimos de pago aprobado sin sesión
+  useEffect(() => {
+    if (mustLoginToFinish) {
+      const t = setTimeout(() => goLoginToFinish(), 0);
+      return () => clearTimeout(t);
+    }
+  }, [mustLoginToFinish]);
+
+  // 🔎 Si ya hay sesión + pago aprobado, verifica si ya existe negocio y redirige al panel
+  useEffect(() => {
+    const run = async () => {
+      if (!authUser) return;
+      if (!(selectedPlan === "pro" || selectedPlan === "premium")) return;
+      if (!isPaid) return;
+
+      try {
+        const effectiveEmail = (formData.email || emailFromUrl || authUser?.email || "").trim().toLowerCase();
+        let existing = null;
+
+        // Busca por user_id primero
+        const byUser = await supabase
+          .from("negocios")
+          .select("id")
+          .eq("user_id", authUser.id)
+          .maybeSingle();
+        if (byUser?.data?.id) existing = byUser.data;
+
+        // Si no lo encontró por user_id, intenta por email
+        if (!existing && effectiveEmail) {
+          const byEmail = await supabase
+            .from("negocios")
+            .select("id")
+            .eq("email", effectiveEmail)
+            .maybeSingle();
+          if (byEmail?.data?.id) existing = byEmail.data;
+        }
+
+        // Si ya existe, manda directo al panel
+        if (existing) {
+          navigate("/mi-negocio");
+        }
+      } catch (e) {
+        console.debug("[registro] skip auto-goToBusiness check:", e?.message || e);
+      }
+    };
+    run();
+  }, [authUser, isPaid, selectedPlan]);
   useEffect(() => {
     if (
       !autoTriggered &&
@@ -467,8 +552,16 @@ const RegisterBusinessPage = () => {
 
       const data = await resp.json().catch(() => ({}));
 
-      // Siempre usa el checkout real (init_point). Evita sandbox_init_point.
-      const checkoutUrl = data?.init_point || data?.checkout_url;
+      // Elegir URL de checkout respetando SANDBOX cuando esté forzado por env
+      const FORCE_SANDBOX = (() => {
+        const v = (import.meta.env.VITE_FORCE_SANDBOX ?? "0").toString().trim().toLowerCase();
+        return v === "1" || v === "true" || v === "yes";
+      })();
+      // En sandbox preferimos sandbox_init_point; en prod usamos init_point
+      const checkoutUrl = (FORCE_SANDBOX ? (data?.sandbox_init_point || data?.init_point) : data?.init_point)
+        || data?.checkout_url
+        || data?.sandbox_checkout_url;
+      console.debug("[MP] FORCE_SANDBOX=", FORCE_SANDBOX, "checkoutUrl=", checkoutUrl);
 
       if (!resp.ok || !checkoutUrl) {
         const msg =
@@ -665,6 +758,18 @@ const RegisterBusinessPage = () => {
               : `${Date.now()}`)
         );
 
+        // 🚫 Si hay sesión pero no corresponde con el correo del pago, bloquea y pide cambiar de cuenta
+        if (authUser && emailMismatch) {
+          setIsSubmitting(false);
+          toast({
+            title: "Cambia a la cuenta del pago",
+            description: "Inicia sesión con el mismo correo que usaste para pagar (se mostrará prellenado).",
+            variant: "destructive",
+          });
+          switchAccountToIntended();
+          return;
+        }
+
         const newBusiness = {
           nombre: formData.nombre,
           descripcion: formData.descripcion,
@@ -684,69 +789,117 @@ const RegisterBusinessPage = () => {
         const normalizedEffectiveEmail =
           (effectiveEmail || "").toLowerCase() || null;
 
-        // 🔐 RLS-safe write
-        if (userId) {
-          const { data: row, error } = await supabase
-            .from("negocios")
-            .upsert(
-              [{ ...newBusiness, email: normalizedEffectiveEmail }],
-              { onConflict: "user_id", ignoreDuplicates: false }
-            )
-            .select()
-            .single();
+        // 🚧 Bloquea inserciones sin sesión (RLS exige usuario autenticado)
+        if (!userId) {
+          setIsSubmitting(false);
+          toast({
+            title: "Inicia sesión para finalizar",
+            description: "Tu pago fue aprobado. Debes iniciar sesión con el mismo correo para crear/ligar tu negocio.",
+          });
+          goLoginToFinish();
+          return;
+        }
 
-          if (error) throw error;
-        } else {
-          const insertRes = await supabase
+        // ⏮️ PRE-CHECK: si ya existe un negocio ligado a este usuario, actualízalo en lugar de intentar INSERT
+        if (userId) {
+          const existingUserBiz = await supabase
             .from("negocios")
-            .insert([{ ...newBusiness, email: normalizedEffectiveEmail }])
-            .select()
+            .select("id, slug")
+            .eq("user_id", userId)
             .maybeSingle();
 
-          if (insertRes?.data && !insertRes.error) {
-            toast({
-              title: "Registro exitoso",
-              description: "Tu negocio ha sido registrado correctamente.",
-            });
-            goToBusiness(normalizedEffectiveEmail);
+          if (existingUserBiz?.data?.id) {
+            const updExisting = await supabase
+              .from("negocios")
+              .update({
+                ...newBusiness,
+                email: normalizedEffectiveEmail,
+                user_id: userId,
+              })
+              .eq("id", existingUserBiz.data.id)
+              .select()
+              .single();
+
+            if (updExisting.error) throw updExisting.error;
+
+            toastify.success("✅ Negocio actualizado.");
+            navigate("/mi-negocio");
+            return;
+          }
+        }
+
+        // 🔐 RLS-safe write (sin upsert onConflict: no hay índice único en user_id)
+        // 1) Intento INSERT directo
+        const insertRes = await supabase
+          .from("negocios")
+          .insert([{ ...newBusiness, email: normalizedEffectiveEmail, user_id: userId }])
+          .select()
+          .maybeSingle();
+
+        if (insertRes?.data && !insertRes.error) {
+          // Insert OK
+          toastify.success("✅ Negocio creado.");
+          navigate("/mi-negocio");
+          return;
+        } else {
+          const dup =
+            insertRes?.error &&
+            (insertRes.error.code === "409" ||
+              insertRes.error.code === "23505" ||
+              /duplicate key value|already exists|unique constraint/i.test(
+                insertRes.error.message || ""
+              ));
+
+          // Si no es duplicado, propaga el error
+          if (!dup) {
+            throw insertRes?.error || new Error("Insert failed");
+          }
+
+          // Buscar existente por user_id o por email y actualizar
+          let existingId = null;
+
+          if (userId) {
+            const byUser = await supabase
+              .from("negocios")
+              .select("id, slug")
+              .eq("user_id", userId)
+              .maybeSingle();
+            if (byUser?.data?.id) existingId = byUser.data.id;
+          }
+
+          if (!existingId && normalizedEffectiveEmail) {
+            const byEmail = await supabase
+              .from("negocios")
+              .select("id, slug")
+              .eq("email", normalizedEffectiveEmail)
+              .maybeSingle();
+            if (byEmail?.data?.id) existingId = byEmail.data.id;
+          }
+
+          if (existingId) {
+            const upd = await supabase
+              .from("negocios")
+              .update({
+                ...newBusiness,
+                email: normalizedEffectiveEmail,
+                user_id: userId,
+              })
+              .eq("id", existingId)
+              .select()
+              .single();
+
+            if (upd.error) throw upd.error;
+            toastify.success("✅ Negocio actualizado.");
+            navigate("/mi-negocio");
             return;
           }
 
-          const dup = insertRes?.error;
-          if (
-            dup &&
-            (dup.code === "409" ||
-              dup.code === "23505" ||
-              /duplicate key value/i.test(dup.message || ""))
-          ) {
-            const fetchRes = await supabase
-              .from("negocios")
-              .select("*")
-              .eq("email", normalizedEffectiveEmail)
-              .maybeSingle();
-
-            if (fetchRes?.data && !fetchRes.error) {
-              toast({
-                title: "Registro existente",
-                description:
-                  "Ya tenías un negocio con ese correo. Usaremos ese registro.",
-              });
-              goToBusiness(normalizedEffectiveEmail);
-              return;
-            }
-
-            if (fetchRes.error) throw fetchRes.error;
-          }
-
-          if (insertRes.error) throw insertRes.error;
+          // Si no localizamos registro (poco probable), redirige al panel y deja que el usuario lo vea.
+          toastify.info("ℹ️ Ya tenías un registro previo. Te llevamos a tu panel.");
+          navigate("/mi-negocio");
+          return;
         }
-
-        toast({
-          title: "Registro exitoso",
-          description: "Tu negocio ha sido registrado correctamente.",
-        });
-        goToBusiness(normalizedEffectiveEmail);
-      }
+      } // <-- Close the else block for selectedPlan === "pro" || "premium"
     } catch (err) {
       console.error("Error al registrar negocio:", err?.message || err);
       if (
@@ -843,163 +996,52 @@ const RegisterBusinessPage = () => {
           {authUser?.email && (
             <p className="text-xs text-gray-500">
               Sesión activa como <strong>{authUser.email}</strong>.
+              {emailMismatch && intendedEmail ? (
+                <> &nbsp;(<span className="text-yellow-700">El pago es para {intendedEmail}</span>)</>
+              ) : null}
             </p>
           )}
         </div>
       )}
 
-      {(((selectedPlan === "pro" || selectedPlan === "premium") && isPaid) ||
-        selectedPlan === "free") && (
-        <form
-          onSubmit={handleSubmit}
-          className="max-w-2xl mx-auto space-y-6 bg-white p-6 shadow rounded-lg"
-        >
-          {REQUIRE_LOGIN_AFTER_PAYMENT &&
-            (selectedPlan === "pro" || selectedPlan === "premium") &&
-            isPaid &&
-            !authUser && (
-              <div className="bg-amber-50 border border-amber-200 text-amber-700 p-3 rounded">
-                <p className="text-sm">
-                  Tu pago está confirmado. Para administrar tu negocio,{" "}
-                  <strong>inicia sesión o crea tu cuenta</strong> con el correo
-                  de compra. Te llevaremos de vuelta al formulario para
-                  finalizar.
-                </p>
-              </div>
-            )}
+      {/* ⚠️ Banner de advertencia si hay sesión activa, pago aprobado y desajuste de correo */}
+      {(selectedPlan === "pro" || selectedPlan === "premium") && isPaid && authUser && emailMismatch && (
+        <div className="max-w-xl mx-auto bg-yellow-50 border border-yellow-300 p-4 rounded-md mb-6 text-center">
+          <p className="text-sm text-yellow-900">
+            Estás autenticado como <strong>{sessionEmail}</strong>, pero el pago pertenece a <strong>{intendedEmail}</strong>. 
+            Para finalizar correctamente, cambia a la cuenta del pago.
+          </p>
+          <div className="mt-3">
+            <Button className="bg-yellow-600 hover:bg-yellow-700 text-white" onClick={switchAccountToIntended}>
+              Cambiar de cuenta
+            </Button>
+          </div>
+        </div>
+      )}
 
-          {/* FREE */}
-          {selectedPlan === "free" && (
-            <>
-              <label className="font-semibold text-sm mb-1 block">
-                Nombre del negocio
-              </label>
-              <Input
-                name="nombre"
-                value={formData.nombre}
-                onChange={handleChange}
-                required
-                placeholder="Ejemplo: Taquería El Buen Sabor"
-              />
-              <label className="font-semibold text-sm mb-1 block">
-                Categoría
-              </label>
-              <Select
-                name="categoria"
-                value={formData.categoria}
-                onValueChange={handleCategoryChange}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Selecciona una categoría" />
-                </SelectTrigger>
-                <SelectContent>
-                  {categories.map((cat) => (
-                    <SelectItem key={cat} value={cat}>
-                      {cat}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <label className="font-semibold text-sm mb-1 block">
-                Teléfono
-              </label>
-              <Input
-                name="telefono"
-                value={formData.telefono}
-                onChange={handleChange}
-                required
-                placeholder="Ejemplo: 555-123-4567"
-              />
-              <label className="font-semibold text-sm mb-1 block">
-                Dirección
-              </label>
-              <Textarea
-                name="direccion"
-                value={formData.direccion}
-                onChange={handleChange}
-                required
-                placeholder="Ejemplo: Av. Juárez 123, Iztapalapa"
-              />
-              <label className="font-semibold text-sm mb-1 block">
-                Descripción del negocio
-              </label>
-              <Textarea
-                name="descripcion"
-                value={formData.descripcion}
-                onChange={handleChange}
-                placeholder="Describe tu negocio brevemente"
-              />
-              <div>
+      {mustLoginToFinish && (
+        <div className="max-w-xl mx-auto bg-white p-6 shadow rounded-lg text-center space-y-4 mb-6">
+          <p className="text-lg font-semibold text-gray-800">
+            Tu pago fue aprobado. Para finalizar y administrar tu negocio,
+            <strong> inicia sesión</strong> con el mismo correo de la compra.
+          </p>
+          <Button className="bg-blue-600 text-white" onClick={goLoginToFinish}>
+            Iniciar sesión para continuar
+          </Button>
+        </div>
+      )}
+
+      {!mustLoginToFinish && (
+        (((selectedPlan === "pro" || selectedPlan === "premium") && isPaid) ||
+          selectedPlan === "free") && (
+          <form
+            onSubmit={handleSubmit}
+            className="max-w-2xl mx-auto space-y-6 bg-white p-6 shadow rounded-lg"
+          >
+            {/* FREE */}
+            {selectedPlan === "free" && (
+              <>
                 <label className="font-semibold text-sm mb-1 block">
-                  Imagen del negocio
-                </label>
-                {previewUrl && (
-                  <div className="mt-4">
-                    <p className="text-sm text-gray-500 mb-1">Vista previa:</p>
-                    <img
-                      src={previewUrl}
-                      alt="Vista previa"
-                      className="w-40 h-auto rounded-md border"
-                    />
-                  </div>
-                )}
-                <input
-                  type="file"
-                  name="imagen"
-                  accept="image/*"
-                  onChange={async (e) => {
-                    const file = e.target.files[0];
-                    if (!file) return;
-                    setImagenNegocio(file);
-                    const localUrl = URL.createObjectURL(file);
-                    setPreviewUrl(localUrl);
-
-                    try {
-                      const fileExt = file.name.split(".").pop();
-                      const fileName = `${Date.now()}.${fileExt}`;
-                      const filePath = `negocios/${fileName}`;
-
-                      const { error } = await supabase.storage
-                        .from("negocios")
-                        .upload(filePath, file, {
-                          cacheControl: "3600",
-                          upsert: false,
-                        });
-
-                      if (error) {
-                        toastify.error("❌ No se pudo subir la imagen.");
-                        return;
-                      }
-
-                      const { data: urlData } = supabase.storage
-                        .from("negocios")
-                        .getPublicUrl(filePath);
-
-                      setFormData((prev) => ({
-                        ...prev,
-                        imagen_url: urlData?.publicUrl || "",
-                      }));
-                    } catch (err) {
-                      console.error("Error al subir imagen:", err);
-                      toastify.error("❌ No se pudo subir la imagen.");
-                    }
-                  }}
-                  className="block w-full text-sm text-gray-700
-                           file:mr-4 file:py-2 file:px-4
-                           file:rounded-full file:border-0
-                           file:text-sm file:font-semibold
-                           file:bg-orange-500 file:text-white
-                           hover:file:bg-orange-400"
-                />
-              </div>
-            </>
-          )}
-
-          {/* PRO / PREMIUM */}
-          {(selectedPlan === "pro" || selectedPlan === "premium") && (
-            <>
-              <div>
-                <label className="block font-medium mb-1">
                   Nombre del negocio
                 </label>
                 <Input
@@ -1009,10 +1051,11 @@ const RegisterBusinessPage = () => {
                   required
                   placeholder="Ejemplo: Taquería El Buen Sabor"
                 />
-              </div>
-              <div>
-                <label className="block font-medium mb-1">Categoría</label>
+                <label className="font-semibold text-sm mb-1 block">
+                  Categoría
+                </label>
                 <Select
+                  name="categoria"
                   value={formData.categoria}
                   onValueChange={handleCategoryChange}
                 >
@@ -1027,9 +1070,9 @@ const RegisterBusinessPage = () => {
                     ))}
                   </SelectContent>
                 </Select>
-              </div>
-              <div>
-                <label className="block font-medium mb-1">Teléfono</label>
+                <label className="font-semibold text-sm mb-1 block">
+                  Teléfono
+                </label>
                 <Input
                   name="telefono"
                   value={formData.telefono}
@@ -1037,54 +1080,182 @@ const RegisterBusinessPage = () => {
                   required
                   placeholder="Ejemplo: 555-123-4567"
                 />
-              </div>
-              <div>
-                <label className="block font-medium mb-1">Dirección</label>
+                <label className="font-semibold text-sm mb-1 block">
+                  Dirección
+                </label>
                 <Textarea
                   name="direccion"
                   value={formData.direccion}
                   onChange={handleChange}
                   required
-                  placeholder="Ejemplo: The Business Address"
+                  placeholder="Ejemplo: Av. Juárez 123, Iztapalapa"
                 />
-              </div>
-            </>
-          )}
+                <label className="font-semibold text-sm mb-1 block">
+                  Descripción del negocio
+                </label>
+                <Textarea
+                  name="descripcion"
+                  value={formData.descripcion}
+                  onChange={handleChange}
+                  placeholder="Describe tu negocio brevemente"
+                />
+                <div>
+                  <label className="font-semibold text-sm mb-1 block">
+                    Imagen del negocio
+                  </label>
+                  {previewUrl && (
+                    <div className="mt-4">
+                      <p className="text-sm text-gray-500 mb-1">Vista previa:</p>
+                      <img
+                        src={previewUrl}
+                        alt="Vista previa"
+                        className="w-40 h-auto rounded-md border"
+                      />
+                    </div>
+                  )}
+                  <input
+                    type="file"
+                    name="imagen"
+                    accept="image/*"
+                    onChange={async (e) => {
+                      const file = e.target.files[0];
+                      if (!file) return;
+                      setImagenNegocio(file);
+                      const localUrl = URL.createObjectURL(file);
+                      setPreviewUrl(localUrl);
 
-          <Button
-            type="submit"
-            disabled={isSubmitting}
-            className="w-full bg-blue-600 hover:bg-blue-700 text-white text-lg flex items-center justify-center gap-2"
-          >
-            {isSubmitting ? (
-              <>
-                <svg
-                  className="animate-spin h-5 w-5 text-white"
-                  xmlns="http://www.w3.org/2000/svg"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                >
-                  <circle
-                    className="opacity-25"
-                    cx="12"
-                    cy="12"
-                    r="10"
-                    stroke="currentColor"
-                    strokeWidth="4"
-                  ></circle>
-                  <path
-                    className="opacity-75"
-                    fill="currentColor"
-                    d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
-                  ></path>
-                </svg>
-                Registrando...
+                      try {
+                        const fileExt = file.name.split(".").pop();
+                        const fileName = `${Date.now()}.${fileExt}`;
+                        const filePath = `negocios/${fileName}`;
+
+                        const { error } = await supabase.storage
+                          .from("negocios")
+                          .upload(filePath, file, {
+                            cacheControl: "3600",
+                            upsert: false,
+                          });
+
+                        if (error) {
+                          toastify.error("❌ No se pudo subir la imagen.");
+                          return;
+                        }
+
+                        const { data: urlData } = supabase.storage
+                          .from("negocios")
+                          .getPublicUrl(filePath);
+
+                        setFormData((prev) => ({
+                          ...prev,
+                          imagen_url: urlData?.publicUrl || "",
+                        }));
+                      } catch (err) {
+                        console.error("Error al subir imagen:", err);
+                        toastify.error("❌ No se pudo subir la imagen.");
+                      }
+                    }}
+                    className="block w-full text-sm text-gray-700
+                             file:mr-4 file:py-2 file:px-4
+                             file:rounded-full file:border-0
+                             file:text-sm file:font-semibold
+                             file:bg-orange-500 file:text-white
+                             hover:file:bg-orange-400"
+                  />
+                </div>
               </>
-            ) : (
-              "Registrar Negocio"
             )}
-          </Button>
-        </form>
+
+            {/* PRO / PREMIUM */}
+            {(selectedPlan === "pro" || selectedPlan === "premium") && (
+              <>
+                <div>
+                  <label className="block font-medium mb-1">
+                    Nombre del negocio
+                  </label>
+                  <Input
+                    name="nombre"
+                    value={formData.nombre}
+                    onChange={handleChange}
+                    required
+                    placeholder="Ejemplo: Taquería El Buen Sabor"
+                  />
+                </div>
+                <div>
+                  <label className="block font-medium mb-1">Categoría</label>
+                  <Select
+                    value={formData.categoria}
+                    onValueChange={handleCategoryChange}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Selecciona una categoría" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {categories.map((cat) => (
+                        <SelectItem key={cat} value={cat}>
+                          {cat}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <label className="block font-medium mb-1">Teléfono</label>
+                  <Input
+                    name="telefono"
+                    value={formData.telefono}
+                    onChange={handleChange}
+                    required
+                    placeholder="Ejemplo: 555-123-4567"
+                  />
+                </div>
+                <div>
+                  <label className="block font-medium mb-1">Dirección</label>
+                  <Textarea
+                    name="direccion"
+                    value={formData.direccion}
+                    onChange={handleChange}
+                    required
+                    placeholder="Ejemplo: The Business Address"
+                  />
+                </div>
+              </>
+            )}
+
+            <Button
+              type="submit"
+              disabled={isSubmitting}
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white text-lg flex items-center justify-center gap-2"
+            >
+              {isSubmitting ? (
+                <>
+                  <svg
+                    className="animate-spin h-5 w-5 text-white"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                  >
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    ></circle>
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
+                    ></path>
+                  </svg>
+                  Registrando...
+                </>
+              ) : (
+                "Registrar Negocio"
+              )}
+            </Button>
+          </form>
+        )
       )}
     </main>
   );

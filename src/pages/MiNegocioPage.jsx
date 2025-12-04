@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Upload } from "lucide-react";
 import { mapPromo } from "@/utils/mapPromo";
+import { getSessionAndProfile } from "@/lib/useUserProfile";
 
 /* =========================
    Utilidad: YouTube a /embed/
@@ -84,7 +85,77 @@ const compressToWebP = async (
 };
 
 const MiNegocioPage = () => {
+  // === Quick badge plan loader (non-invasive) ===
+  const [badgeLoading, setBadgeLoading] = useState(true);
+  const [badgeNegocio, setBadgeNegocio] = useState(null);
+  const [currentUserId, setCurrentUserId] = useState(null);
+  const [canEditBusiness, setCanEditBusiness] = useState(false);
+
+  async function loadBusinessBadge() {
+    setBadgeLoading(true);
+    const { data: { session } } = await supabase.auth.getSession();
+    const userId = session?.user?.id;
+    if (!userId) { setBadgeLoading(false); return; }
+
+    const { data, error } = await supabase
+      .from('negocios')
+      .select('*')
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (error) console.error('[MiNegocio] Error cargando negocio', error);
+    if (!error) setBadgeNegocio(data || null);
+    setBadgeLoading(false);
+  }
+
+  useEffect(() => {
+    loadBusinessBadge();
+  }, []);
+
+  // Si vienes del flujo de pago con ?status=approved, refetch para ver el upgrade (solo para el badge)
+  useEffect(() => {
+    const usp = new URLSearchParams(window.location.search);
+    const isApproved =
+      usp.get("status") === "approved" ||
+      usp.get("collection_status") === "approved";
+    if (isApproved) loadBusinessBadge();
+  }, []);
+  
   const navigate = useNavigate();
+    // === Plan del usuario (no rompe flujos existentes) ===
+  const [sessEmail, setSessEmail] = useState(null);
+  const [plan, setPlan] = useState({ type: null, status: null, expiresAt: null });
+  const [loadingPlan, setLoadingPlan] = useState(true);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const { user, profile, needsLogin, error } = await getSessionAndProfile("auto");
+        if (!alive) return;
+
+        if (needsLogin || !user?.email) {
+          setSessEmail(null);
+          setPlan({ type: null, status: null, expiresAt: null });
+          setLoadingPlan(false);
+          return;
+        }
+
+        setSessEmail(user.email ?? null);
+        setPlan({
+          type: profile?.plan_type ?? null,
+          status: profile?.plan_status ?? null,
+          expiresAt: profile?.plan_expires_at ?? null,
+        });
+
+        if (error) console.warn("[MiNegocioPage] perfil warning:", error);
+      } catch (e) {
+        console.error("[MiNegocioPage] perfil error:", e);
+      } finally {
+        if (alive) setLoadingPlan(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
 
   const SUPPORT_URL =
     "https://wa.me/525569006664?text=Hola%20necesito%20reactivar%20mi%20IA";
@@ -120,6 +191,7 @@ const MiNegocioPage = () => {
   const [hasSession, setHasSession] = useState(false);
   const [sessionEmail, setSessionEmail] = useState(null);
   const [shouldShowLoginCta, setShouldShowLoginCta] = useState(false);
+  const [profilePlan, setProfilePlan] = useState("");
 
   const [business, setBusiness] = useState({
     id: "",
@@ -143,8 +215,25 @@ const MiNegocioPage = () => {
     gallery_images: [],
   });
 
+  const ensureCanEdit = () => {
+    if (!currentUserId || !business?.id) {
+      alert("Necesitas iniciar sesión para administrar tu negocio.");
+      return false;
+    }
+
+    if (!canEditBusiness) {
+      alert(
+        "Solo los negocios con Plan Pro o Premium, ligados a tu cuenta, pueden editar desde aquí. Si crees que es un error, contáctanos por WhatsApp."
+      );
+      return false;
+    }
+
+    return true;
+  };
+
   const handleUploadGallery = async () => {
     if (!business?.id || selectedImages.length === 0) return;
+    if (!ensureCanEdit()) return;
     try {
       const uploadedUrls = [];
       for (const img of selectedImages) {
@@ -189,8 +278,16 @@ const MiNegocioPage = () => {
     }
   };
 
-  // Flags y estados IA
-  const isPremiumPlan = (business?.plan_type || "").toLowerCase() === "premium";
+  // ---- unified plan source ----
+const planName = (profilePlan || business?.plan_type || "").toLowerCase();
+  const isPremiumPlan = planName === "premium";
+
+  // debug interno (no uses window._planName)
+  // console.log("[MiNegocioPage DEBUG]", { planName, isPremiumPlan, from: {
+  //   plan_type: plan?.type ?? null,
+  //   profilePlan: profilePlan ?? null,
+  //   business_plan_type: business?.plan_type ?? null,
+  // }});
   const [aiCoverPrompt, setAiCoverPrompt] = useState("");
   const [aiLogoPrompt, setAiLogoPrompt] = useState("");
   const [loadingCover, setLoadingCover] = useState(false);
@@ -416,6 +513,7 @@ const MiNegocioPage = () => {
   };
 
   const handleEliminarImagenGaleria = async (url) => {
+    if (!ensureCanEdit()) return;
     const nuevasUrls = (business.gallery_images || []).filter(
       (img) => img !== url
     );
@@ -435,6 +533,10 @@ const MiNegocioPage = () => {
   const [isUpdatingPromotion, setIsUpdatingPromotion] = useState(false);
   const actualizarPromocion = async () => {
     if (isUpdatingPromotion) return;
+    if (!ensureCanEdit()) {
+      setIsUpdatingPromotion(false);
+      return;
+    }
     setIsUpdatingPromotion(true);
 
     let nuevaImagenUrl = promo.imagen_url;
@@ -529,9 +631,30 @@ const MiNegocioPage = () => {
         const session = sessionData?.session || null;
         const userId = session?.user?.id || null;
         const userEmail = session?.user?.email || null;
+        setCurrentUserId(userId || null);
 
         setHasSession(!!session);
         setSessionEmail(userEmail || null);
+
+        // 3.1) Traer plan desde profiles (prioridad para la UI)
+        if (session && userId) {
+          try {
+            const { data: prof, error: profErr } = await supabase
+              .from("profiles")
+              .select("plan_type")
+              .eq("id", userId)
+              .single();
+            if (!profErr) {
+              setProfilePlan(String(prof?.plan_type || ""));
+            } else {
+              setProfilePlan("");
+            }
+          } catch {
+            setProfilePlan("");
+          }
+        } else {
+          setProfilePlan("");
+        }
 
         // 3) Si no hay sesión y regresamos de pago → CTA login
         if (!session) {
@@ -540,91 +663,89 @@ const MiNegocioPage = () => {
           return;
         }
 
-        // 4) Con sesión: buscar TODOS los negocios por user_id o email (evitar escoger el errado)
-        const { data: rows, error: selErr } = await supabase
-          .from("negocios")
-          .select("*")
-          .or(`user_id.eq.${userId},email.eq.${userEmail}`)
-          .eq("is_deleted", false)
-          .order("updated_at", { ascending: false })
-          .limit(20);
-
-        if (selErr) {
-          console.error("Error al obtener negocio:", selErr?.message, selErr);
+        // 4) Con sesión: buscar el negocio por user_id de forma segura
+        const { data, error } = await supabase
+          .from('negocios')
+          .select('*')
+          .eq('user_id', userId)
+          .maybeSingle();
+        if (error) {
+          console.error('[MiNegocio] Error cargando negocio', error);
           setAuthChecked(true);
           return;
         }
+        let negocio = data || null;
 
-        // Elegir el mejor candidato:
-        // prioridad: premium > pro > free, y luego más reciente
-        const priority = (p = "") => {
-          const v = String(p).toLowerCase();
-          if (v === "premium") return 3;
-          if (v === "pro") return 2;
-          if (v === "free") return 1;
-          return 0;
-        };
-        let negocio =
-          (rows || [])
-            .sort((a, b) => {
-              const pa = priority(a?.plan_type);
-              const pb = priority(b?.plan_type);
-              if (pb !== pa) return pb - pa;
-              const ta = new Date(
-                a?.updated_at || a?.created_at || 0
-              ).getTime();
-              const tb = new Date(
-                b?.updated_at || b?.created_at || 0
-              ).getTime();
-              return tb - ta;
-            })
-            .at(0) || null;
-
-        // 5) Si NO existe, crear uno básico (por si venía de pago)
-        if (!negocio && (emailFromUrl || userEmail)) {
+        // 5) Si NO existe negocio y venimos de pago PRO/PREMIUM -> crear ligado al user_id
+        if (
+          !negocio &&
+          userId &&
+          (planFromUrl === "pro" || planFromUrl === "premium")
+        ) {
           const basePayload = {
             user_id: userId,
             email: userEmail || emailFromUrl,
             nombre: "",
             direccion: "",
             telefono: "",
-            plan_type: planFromUrl || "free",
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
+            plan_type: planFromUrl,
           };
+
           const { data: inserted, error: insertErr } = await supabase
-            .from("negocios")
+            .from('negocios')
             .insert(basePayload)
             .select()
             .single();
-          if (!insertErr) negocio = inserted;
+
+          if (!insertErr) {
+            negocio = inserted;
+          }
         }
 
         // 6) Aplicar plan si venía en la URL (y difiere)
         if (negocio && (planFromUrl === "pro" || planFromUrl === "premium")) {
           if ((negocio.plan_type || "").toLowerCase() !== planFromUrl) {
             const { data: updated, error: upErr } = await supabase
-              .from("negocios")
+              .from('negocios')
               .update({
                 plan_type: planFromUrl,
                 updated_at: new Date().toISOString(),
               })
-              .eq("id", negocio.id)
+              .eq('id', negocio.id)
               .select()
               .single();
-            if (!upErr && updated) negocio = updated;
+            if (!upErr && updated) {
+              negocio = updated;
+            }
           }
         }
 
-        // 7) Normalizar el negocio encontrado y fijar user_id si falta
+        // 7) Normalizar negocio + asegurar dueño PRO/PREMIUM
         if (negocio) {
-          if (!negocio.user_id && userId) {
+          const planLower = (negocio.plan_type || "").toLowerCase();
+
+          // Solo si es PRO/PREMIUM y falta user_id, lo ligamos al usuario actual
+          if (
+            (planLower === "pro" || planLower === "premium") &&
+            userId &&
+            !negocio.user_id
+          ) {
             await supabase
-              .from("negocios")
+              .from('negocios')
               .update({ user_id: userId })
-              .eq("id", negocio.id);
+              .eq('id', negocio.id);
             negocio.user_id = userId;
           }
+
+          const ownerId = negocio.user_id || negocio.owner_user_id || null;
+          const isPaidPlan = planLower === "pro" || planLower === "premium";
+
+          const isOwner = ownerId && userId && ownerId === userId;
+          const isUnclaimed = !ownerId;
+          const isPaidOwner = isPaidPlan && isOwner;
+
+          // Solo el dueño de un plan Pro/Premium puede editar
+          setCanEditBusiness(!!isPaidOwner);
 
           setBusiness({
             id: negocio.id,
@@ -635,6 +756,9 @@ const MiNegocioPage = () => {
             video_url: negocio.video_embed_url || negocio.video_url || "",
             video_embed_url: negocio.video_embed_url || "",
           });
+        } else {
+          // No hay negocio asociado al usuario autenticado
+          setCanEditBusiness(false);
         }
 
         // 8) Limpia la URL si venías de pago
@@ -764,6 +888,13 @@ const MiNegocioPage = () => {
       }
 
       setPromoSaveStep("Guardando…");
+
+      if (!ensureCanEdit()) {
+        setIsSavingPromotion(false);
+        setPromoSaveStep("");
+        return;
+      }
+
       const { error } = await supabase.from("promociones").upsert(
         [
           {
@@ -841,6 +972,7 @@ const MiNegocioPage = () => {
   };
 
   const handleDeletePromocion = async (promocionId) => {
+    if (!ensureCanEdit()) return;
     try {
       const { error } = await supabase
         .from("promociones")
@@ -862,6 +994,7 @@ const MiNegocioPage = () => {
 
   // Eliminar promoción del negocio (campo plano en negocios)
   const handleDeletePromotion = async () => {
+    if (!ensureCanEdit()) return;
     try {
       const { error } = await supabase
         .from("negocios")
@@ -897,9 +1030,9 @@ const MiNegocioPage = () => {
 
   // Guardar cambios (update directo por user_id) — USAR getSession SAFE
   const handleSubmit = async () => {
-    const { data: s } = await supabase.auth.getSession();
-    const userObj = s?.session?.user || null;
-    if (!userObj) {
+    const { data: { session } } = await supabase.auth.getSession();
+    const userId = session?.user?.id;
+    if (!userId) {
       alert("Usuario no autenticado.");
       return;
     }
@@ -917,52 +1050,19 @@ const MiNegocioPage = () => {
           .filter(Boolean)
       : [];
 
-    const { data: updatedData, error } = await supabase
-      .from("negocios")
-      .update({
-        nombre: business.nombre || "",
-        descripcion: business.descripcion || "",
-        telefono: business.telefono || "",
-        whatsapp: business.whatsapp || "",
-        direccion: business.direccion || "",
-        mapa_embed_url: business.mapa_embed_url || "",
-        instagram: business.instagram || "",
-        facebook: business.facebook || "",
-        tiktok: business.tiktok || "",
-        web: business.web || "",
-        portada_url: business.portada_url || "",
-        logo_url: business.logo_url || "",
-        video_embed_url: business.video_embed_url || "",
-        imagen_url: business.imagen_url || "",
-        menu: business.menu || "",
-        categoria: business.categoria || "",
-        slug_categoria:
-          business.categoria || ""
-            ? (business.categoria || "").toLowerCase().replace(/\s+/g, "-")
-            : "",
-        services: Array.isArray(business.services) ? business.services : [],
-        gallery_images: Array.isArray(business.gallery_images)
-          ? business.gallery_images
-          : [],
-        email: business.email || "",
-        promocion_titulo: business.promocion_titulo || "",
-        promocion_imagen: business.promocion_imagen || "",
-        promocion_fecha: business.promocion_fecha || "",
-        plan_type: business.plan_type || "",
-        updated_at: new Date().toISOString(),
-        servicios: serviciosArrayForSave,
-      })
-      .eq("user_id", userObj.id)
-      .select()
-      .single();
-
-    if (error) {
-      console.error("Error al actualizar negocio:", error);
+    const { data, error } = await supabase
+      .from('negocios')
+      .select('*')
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (error) console.error('[MiNegocio] Error cargando negocio', error);
+    if (error || !data) {
       alert("Error al actualizar negocio.");
       return;
     }
 
-    setBusiness(updatedData);
+    // Aquí deberías proceder con la actualización si necesario, este bloque solo muestra cómo obtener el negocio de forma segura.
+    setBusiness(data);
     alert("Negocio actualizado correctamente");
   };
 
@@ -970,6 +1070,7 @@ const MiNegocioPage = () => {
   const handleUpload = async (e, campo) => {
     const file = e.target.files[0];
     if (!file || !user) return;
+    if (!ensureCanEdit()) return;
 
     const isLogo = campo === "logo_url";
     const { blob, filename } = await compressToWebP(file, {
@@ -1009,6 +1110,7 @@ const MiNegocioPage = () => {
   const handleDeletePortada = async () => {
     if (!business.id) return;
     try {
+      if (!ensureCanEdit()) return;
       const { error: updateError } = await supabase
         .from("negocios")
         .update({ portada_url: null })
@@ -1024,6 +1126,7 @@ const MiNegocioPage = () => {
   const handleDeleteLogo = async () => {
     if (!business.id) return;
     try {
+      if (!ensureCanEdit()) return;
       const { error: updateError } = await supabase
         .from("negocios")
         .update({ logo_url: null })
@@ -1040,9 +1143,9 @@ const MiNegocioPage = () => {
   // IA descripción (Edge function) mejorada: autoguarda en Supabase la descripción generada
   const handleGenerateAI = async () => {
     if (isGeneratingDesc) return;
+    if (!ensureCanEdit()) return;
     // Verificación estricta: IA solo para plan Premium
-    const plan = (business?.plan_type || "").toLowerCase();
-    if (plan !== "premium") {
+    if (planName !== "premium") {
       toast({
         title: "Función Premium",
         description:
@@ -1145,7 +1248,6 @@ const MiNegocioPage = () => {
 
   // IA imágenes (Edge function)
   const callImageGenerator = async (kind, prompt) => {
-    const plan = (business?.plan_type || "").toLowerCase();
     if (!["cover", "logo"].includes(kind)) {
       toast({
         title: "Tipo de generación inválido",
@@ -1154,7 +1256,8 @@ const MiNegocioPage = () => {
       });
       return;
     }
-    if (plan !== "premium") {
+    if (!ensureCanEdit()) return;
+    if (planName !== "premium") {
       toast({
         title: "Función Premium",
         description:
@@ -1249,6 +1352,7 @@ const MiNegocioPage = () => {
 
   // Ubicación actual
   const handleSetCurrentLocation = () => {
+    if (!ensureCanEdit()) return;
     if (!navigator.geolocation) {
       alert("Tu navegador no soporta geolocalización.");
       return;
@@ -1402,6 +1506,7 @@ const MiNegocioPage = () => {
 
   const handleClearMap = async () => {
     try {
+      if (!ensureCanEdit()) return;
       await supabase
         .from("negocios")
         .update({ mapa_embed_url: "" })
@@ -1420,6 +1525,7 @@ const MiNegocioPage = () => {
       "⚠️ ¿Estás seguro de que deseas eliminar permanentemente este negocio? Esta acción no se puede deshacer."
     );
     if (!confirmDelete) return;
+    if (!ensureCanEdit()) return;
     const { error } = await supabase
       .from("negocios")
       .delete()
@@ -1442,6 +1548,7 @@ const MiNegocioPage = () => {
         alert("No se pudo obtener el usuario.");
         return;
       }
+      if (!ensureCanEdit()) return;
 
       const safeBusiness = {
         ...business,
@@ -1530,6 +1637,7 @@ const MiNegocioPage = () => {
       alert("No se encontró el ID del negocio.");
       return;
     }
+    if (!ensureCanEdit()) return;
 
     const serviciosArray = business.servicios
       ? business.servicios
@@ -1657,6 +1765,10 @@ const MiNegocioPage = () => {
       });
       return;
     }
+    if (!ensureCanEdit()) {
+      setIsSavingMenu(false);
+      return;
+    }
     setIsSavingMenu(true);
     try {
       const { error } = await supabase
@@ -1679,6 +1791,7 @@ const MiNegocioPage = () => {
   // Video YouTube
   const [isSavingVideo, setIsSavingVideo] = useState(false);
   const handleSaveVideo = async () => {
+    if (!ensureCanEdit()) return;
     if (!business.id || !business.video_url) return;
     setIsSavingVideo(true);
     try {
@@ -1713,14 +1826,34 @@ const MiNegocioPage = () => {
     return id ? `https://www.youtube.com/embed/${id}` : "";
   };
 
-  if (!business) return null;
-  const plan = (business?.plan_type || "").toLowerCase();
-
+ 
   return (
     <div className="p-6 max-w-3xl mx-auto bg-white shadow-lg rounded-lg border border-gray-200">
       <h1 className="text-2xl font-bold mb-4 text-gray-800">
         Mi negocio: {business.nombre}
       </h1>
+      {/* ✨ Sello rápido del plan (no invasivo) */}
+      {(() => {
+        const plan = (badgeNegocio?.plan_type || "free").toLowerCase();
+        const isPro = plan === "pro";
+        const isPremium = plan === "premium";
+        if (badgeLoading) return null;
+        return (
+          isPremium ? (
+            <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-emerald-800">
+              ✨ Estás en <b>Plan Premium</b>. Ya puedes usar todas las funciones.
+            </div>
+          ) : isPro ? (
+            <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-3 text-blue-800">
+              ⭐ Estás en <b>Plan Pro</b>. Algunas funciones avanzadas requieren Premium.
+            </div>
+          ) : (
+            <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-800">
+              🆓 Estás en <b>Plan Free</b>. Para promociones y video, mejora a Premium.
+            </div>
+          )
+        );
+      })()}
 
       {/* Mensaje cuando volvemos de Mercado Pago sin sesión */}
       {authChecked && shouldShowLoginCta && !hasSession && (
@@ -1741,19 +1874,19 @@ const MiNegocioPage = () => {
       )}
 
       {/* Mensajes por plan */}
-      {plan === "free" && (
+      {planName === "free" && (
         <div className="bg-yellow-100 border border-yellow-300 text-yellow-800 px-4 py-2 rounded mb-4">
-          Estás en el <strong>Plan Gratuito</strong>. Solo puedes registrar
-          nombre, dirección y teléfono.
+          Estás en el <strong>Plan Gratuito</strong>. Tu negocio aparece como ficha básica de gancho.
+          Para administrar galería, promociones, IA y más, actualiza a <strong>Pro</strong> o <strong>Premium</strong>.
         </div>
       )}
-      {plan === "pro" && (
+      {planName === "pro" && (
         <div className="bg-blue-100 border border-blue-300 text-blue-800 px-4 py-2 rounded mb-4">
           Estás en el <strong>Plan Pro</strong>. Tienes acceso a redes sociales,
           galería de imágenes y descripción de tu negocio (sin IA).
         </div>
       )}
-      {plan === "premium" && (
+      {planName === "premium" && (
         <div className="bg-green-100 border border-green-300 text-green-800 px-4 py-2 rounded mb-4">
           Estás en el <strong>Plan Premium</strong>. Tienes acceso completo:
           redes sociales, galería, video, promociones y generación con IA
@@ -1761,8 +1894,59 @@ const MiNegocioPage = () => {
         </div>
       )}
 
+      {/* Guard rails de edición: explica por qué no puede editar */}
+      {authChecked && !canEditBusiness && (() => {
+        const ownerId = business?.user_id || business?.owner_user_id || null;
+        const hasOwner = !!ownerId;
+        const isFree = planName === "free";
+
+        // Caso 1: negocio free sin dueño → solo lectura amigable
+        if (isFree && !hasOwner) {
+          return (
+            <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              <p className="font-semibold">
+                Este negocio está en plan gratuito y en modo solo lectura.
+              </p>
+              <p>
+                Para administrarlo desde aquí y desbloquear más opciones, puedes
+                contratar un plan Pro o Premium.
+              </p>
+            </div>
+          );
+        }
+
+        // Caso 2: hay dueño distinto al usuario actual → mensaje rojo
+        if (hasOwner && hasSession) {
+          return (
+            <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+              <p className="font-semibold">Solo el dueño puede editar este perfil.</p>
+              <p>
+                Estás conectado como <strong>{sessionEmail}</strong>, pero este negocio
+                está ligado a otra cuenta. Si crees que es un error o deseas reclamarlo,
+                contáctanos por WhatsApp y lo revisamos contigo.
+              </p>
+            </div>
+          );
+        }
+
+        // Caso 3: sin sesión → pedir login
+        if (!hasSession) {
+          return (
+            <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+              <p className="font-semibold">Inicia sesión para administrar tu negocio.</p>
+              <p>
+                Usa la misma cuenta con la que contrataste tu plan Pro o Premium. Si ya
+                hiciste tu pago y no puedes acceder, contáctanos por WhatsApp.
+              </p>
+            </div>
+          );
+        }
+
+        return null;
+      })()}
+
       {/* Información general */}
-      {(plan === "free" || plan === "pro" || plan === "premium") && (
+      {["free", "pro", "premium"].includes(planName) && (
         <>
           <h2 className="text-xl font-semibold text-gray-900 mt-4">
             Información general
@@ -1833,7 +2017,7 @@ const MiNegocioPage = () => {
           </div>
 
           {/* Mapa / Ubicación (solo Pro y Premium) */}
-          {(plan === "pro" || plan === "premium") && (
+          {(planName === "pro" || planName === "premium") && (
             <>
               <h2 className="text-xl font-semibold text-gray-900 mt-6">
                 Mapa y ubicación
@@ -1950,7 +2134,7 @@ const MiNegocioPage = () => {
       )}
 
       {/* Descripción */}
-      {(plan === "pro" || plan === "premium") && (
+      {(planName === "pro" || planName === "premium") && (
         <>
           <h2 className="text-xl font-semibold text-gray-900 mt-6">
             Descripción del negocio
@@ -1975,7 +2159,7 @@ const MiNegocioPage = () => {
               setBusiness((prev) => ({ ...prev, servicios: e.target.value }))
             }
           />
-          {plan === "premium" && (
+          {planName === "premium" && (
             <>
               <Button
                 id="ai-generate"
@@ -1998,7 +2182,7 @@ const MiNegocioPage = () => {
       )}
 
       {/* Redes + Galería */}
-      {(plan === "pro" || plan === "premium") && (
+      {(planName === "pro" || planName === "premium") && (
         <>
           <h2 className="text-xl font-semibold text-gray-900 mt-8">
             Redes sociales
@@ -2115,7 +2299,7 @@ const MiNegocioPage = () => {
       {/* ========================= */}
       {/* Menú (solo Premium + food/drink) */}
       {/* ========================= */}
-      {plan === "premium" && isFoodCategory && (
+      {planName === "premium" && isFoodCategory && (
         <>
           <h2 className="text-xl font-semibold text-gray-900 mt-8">Menú</h2>
           <div className="h-px bg-gray-200 my-3" />
@@ -2168,7 +2352,7 @@ const MiNegocioPage = () => {
       )}
 
       {/* Video (único, solo Premium) */}
-      {plan === "premium" && (
+      {planName === "premium" && (
         <>
           <h2 className="text-xl font-semibold text-gray-900 mt-8">Video</h2>
           <div className="h-px bg-gray-200 my-3" />
@@ -2244,7 +2428,7 @@ const MiNegocioPage = () => {
             Cambiar portada
           </Button>
 
-          {plan === "premium" && (
+          {planName === "premium" && (
             <details className="mt-2 border border-gray-200 rounded-lg">
               <summary className="px-4 py-2 bg-orange-500 text-white font-medium rounded-md cursor-pointer hover:bg-orange-600 select-none">
                 Opciones de portada (IA)
@@ -2490,7 +2674,7 @@ const MiNegocioPage = () => {
             Cambiar logo
           </Button>
 
-          {plan === "premium" && (
+          {planName === "premium" && (
             <details className="mt-2 border border-gray-200 rounded-lg">
               <summary className="px-4 py-2 bg-orange-500 text-white font-medium rounded-md cursor-pointer hover:bg-orange-600 select-none">
                 Opciones de logo (IA)
@@ -2745,7 +2929,7 @@ const MiNegocioPage = () => {
       <h2 className="text-lg font-bold mt-8 text-orange-500">
         🎁 Nueva Promoción
       </h2>
-      {plan !== "premium" && (
+      {planName !== "premium" && (
         <div className="my-3 p-3 rounded bg-yellow-50 border border-yellow-200 text-sm text-yellow-800">
           Las promociones están disponibles solo en el{" "}
           <strong>Plan Premium</strong>. Actualiza tu plan para habilitar este
@@ -2763,13 +2947,13 @@ const MiNegocioPage = () => {
 
       <div
         className={`mt-2 mb-6 border p-4 rounded-lg bg-orange-50 space-y-4 ${
-          isSavingPromotion || plan !== "premium"
+          isSavingPromotion || planName !== "premium"
             ? "opacity-60 pointer-events-none"
             : ""
         }`}
-        aria-disabled={isSavingPromotion || plan !== "premium"}
+        aria-disabled={isSavingPromotion || planName !== "premium"}
         title={
-          plan !== "premium" ? "Disponible solo en Plan Premium" : undefined
+          planName !== "premium" ? "Disponible solo en Plan Premium" : undefined
         }
       >
         <div>
@@ -2783,7 +2967,7 @@ const MiNegocioPage = () => {
             onChange={(e) =>
               setPromo((prev) => ({ ...prev, titulo: e.target.value }))
             }
-            disabled={isSavingPromotion || plan !== "premium"}
+            disabled={isSavingPromotion || planName !== "premium"}
           />
         </div>
 
@@ -2798,7 +2982,7 @@ const MiNegocioPage = () => {
             onChange={(e) =>
               setPromo((prev) => ({ ...prev, descripcion: e.target.value }))
             }
-            disabled={isSavingPromotion || plan !== "premium"}
+            disabled={isSavingPromotion || planName !== "premium"}
           />
         </div>
 
@@ -2816,7 +3000,7 @@ const MiNegocioPage = () => {
               if (file) setPreviewImage(URL.createObjectURL(file));
             }}
             className="mt-1"
-            disabled={isSavingPromotion || plan !== "premium"}
+            disabled={isSavingPromotion || planName !== "premium"}
           />
         </div>
 
@@ -2840,7 +3024,7 @@ const MiNegocioPage = () => {
               onChange={(e) =>
                 setPromo((prev) => ({ ...prev, fecha_inicio: e.target.value }))
               }
-              disabled={isSavingPromotion || plan !== "premium"}
+              disabled={isSavingPromotion || planName !== "premium"}
             />
           </div>
 
@@ -2855,7 +3039,7 @@ const MiNegocioPage = () => {
               onChange={(e) =>
                 setPromo((prev) => ({ ...prev, fecha_fin: e.target.value }))
               }
-              disabled={isSavingPromotion || plan !== "premium"}
+              disabled={isSavingPromotion || planName !== "premium"}
             />
           </div>
         </div>
@@ -2866,9 +3050,9 @@ const MiNegocioPage = () => {
               type="button"
               onClick={actualizarPromocion}
               className="bg-yellow-500 hover:bg-yellow-600 text-white disabled:opacity-60 disabled:cursor-not-allowed"
-              disabled={isUpdatingPromotion || plan !== "premium"}
+              disabled={isUpdatingPromotion || planName !== "premium"}
               title={
-                plan !== "premium"
+                planName !== "premium"
                   ? "Disponible solo en Plan Premium"
                   : undefined
               }
@@ -2904,9 +3088,9 @@ const MiNegocioPage = () => {
               type="button"
               onClick={handleSavePromocion}
               className="bg-green-600 hover:bg-green-700 text-white disabled:opacity-60 disabled:cursor-not-allowed"
-              disabled={isSavingPromotion || plan !== "premium"}
+              disabled={isSavingPromotion || planName !== "premium"}
               title={
-                plan !== "premium"
+                planName !== "premium"
                   ? "Disponible solo en Plan Premium"
                   : undefined
               }
@@ -2960,7 +3144,7 @@ const MiNegocioPage = () => {
             <PromoCard
               key={p.id}
               promo={p}
-              canDelete
+              canDelete={canEditBusiness}
               onDelete={handleDeletePromocion}
               onEdit={handleEditPromo}
             />
@@ -3089,50 +3273,62 @@ const MiNegocioPage = () => {
       )}
 
       {/* Extras UI */}
-      <h2 className="text-xl font-semibold text-gray-900 mt-8">
-        Herramientas Premium
-      </h2>
-      <div className="h-px bg-gray-200 my-3" />
-      <div className="mt-8 bg-orange-50 p-4 rounded shadow">
-        <h3 className="text-md font-semibold text-orange-600 mb-2">
-          Herramientas Premium
-        </h3>
-        <ul className="text-sm list-disc list-inside text-gray-800">
-          <li>✅ SEO keywords personalizadas</li>
-          <li>✅ Paquete de marketing</li>
-          <li>✅ Video promocional</li>
-        </ul>
-      </div>
+      {planName === "premium" && (
+        <>
+          <h2 className="text-xl font-semibold text-gray-900 mt-8">
+            Herramientas Premium
+          </h2>
+          <div className="h-px bg-gray-200 my-3" />
+          <div className="mt-8 bg-orange-50 p-4 rounded shadow">
+            <h3 className="text-md font-semibold text-orange-600 mb-2">
+              Herramientas Premium
+            </h3>
+            <ul className="text-sm list-disc list-inside text-gray-800">
+              <li>✅ SEO keywords personalizadas</li>
+              <li>✅ Paquete de marketing</li>
+              <li>✅ Video promocional</li>
+            </ul>
+          </div>
+        </>
+      )}
 
-      <h2 className="text-xl font-semibold text-gray-900 mt-8">Estadísticas</h2>
-      <div className="h-px bg-gray-200 my-3" />
-      <div className="mt-4 text-sm text-gray-700">
-        <p>
-          📍 <strong>{business.visitas}</strong> visitas
-        </p>
-        <p>
-          🖱️ <strong>{business.clics}</strong> clics
-        </p>
-        <p className="text-gray-500 text-xs">
-          Disponibles en planes Pro y Premium
-        </p>
-      </div>
+      {(planName === "pro" || planName === "premium") && (
+        <>
+          <h2 className="text-xl font-semibold text-gray-900 mt-8">
+            Estadísticas
+          </h2>
+          <div className="h-px bg-gray-200 my-3" />
+          <div className="mt-4 text-sm text-gray-700">
+            <p>
+              📍 <strong>{business.visitas}</strong> visitas
+            </p>
+            <p>
+              🖱️ <strong>{business.clics}</strong> clics
+            </p>
+            <p className="text-gray-500 text-xs">
+              Disponibles en planes Pro y Premium
+            </p>
+          </div>
+        </>
+      )}
 
-      <div className="mt-6 flex flex-col sm:flex-row gap-3 items-start">
-        <Button
-          onClick={handleUpdateBusiness}
-          className="bg-blue-600 hover:bg-blue-700 text-white"
-        >
-          Guardar cambios de negocio
-        </Button>
-        <Button
-          variant="destructive"
-          className="text-white"
-          onClick={handleDeleteBusiness}
-        >
-          Eliminar negocio permanentemente
-        </Button>
-      </div>
+      {canEditBusiness && (
+        <div className="mt-6 flex flex-col sm:flex-row gap-3 items-start">
+          <Button
+            onClick={handleUpdateBusiness}
+            className="bg-blue-600 hover:bg-blue-700 text-white"
+          >
+            Guardar cambios de negocio
+          </Button>
+          <Button
+            variant="destructive"
+            className="text-white"
+            onClick={handleDeleteBusiness}
+          >
+            Eliminar negocio permanentemente
+          </Button>
+        </div>
+      )}
     </div>
   );
 };

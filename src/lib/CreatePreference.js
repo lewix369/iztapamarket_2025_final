@@ -34,10 +34,10 @@ export const createPreference = async (plan, email) => {
 
     // === Selección de ENDPOINT ===
     // Prioridades:
-    // 1) VITE_FUNCTIONS_URL + "/api/create_preference" (cuando lo definas como base de funciones)
-    // 2) VITE_CREATE_PREFERENCE_URL (si lo definiste directo)
-    // 3) Si estamos en el dominio productivo, usamos ruta relativa "/api/create_preference" (Vercel)
-    // 4) Fallback local al backend Express en 3001
+    // 1) VITE_CREATE_PREFERENCE_URL (si lo definiste directo, por ejemplo http://localhost:3001/api/create_preference_v2)
+    // 2) VITE_FUNCTIONS_URL + "/api/create_preference_v2" (cuando lo definas como base de funciones)
+    // 3) Si estamos en el dominio productivo, usamos ruta relativa "/api/create_preference_v2" (Vercel)
+    // 4) Fallback local al backend Express en 3001 (ruta v2)
     const FN_BASE =
       (typeof import.meta !== "undefined" && import.meta?.env?.VITE_FUNCTIONS_URL) ||
       (typeof process !== "undefined" && process?.env?.VITE_FUNCTIONS_URL) ||
@@ -52,13 +52,13 @@ export const createPreference = async (plan, email) => {
     const origin = onBrowser ? window.location.origin : "";
 
     const ENDPOINT = (
-      FN_BASE
-        ? `${FN_BASE.replace(/\/+$/, "")}/api/create_preference`
-        : CFG_ENDPOINT
-        ? CFG_ENDPOINT
+      CFG_ENDPOINT
+        ? CFG_ENDPOINT.replace(/\/+$/, "")
+        : FN_BASE
+        ? `${FN_BASE.replace(/\/+$/, "")}/api/create_preference_v2`
         : onBrowser && origin.includes("iztapamarket.com")
-        ? "/api/create_preference" // relativo para Vercel en prod
-        : "http://localhost:3001/api/create_preference" // dev local
+        ? "/api/create_preference_v2" // relativo para Vercel en prod
+        : "http://localhost:3001/api/create_preference_v2" // dev local
     );
 
     console.log("🔧 [CreatePreference] ENDPOINT =", ENDPOINT);
@@ -97,11 +97,27 @@ export const createPreference = async (plan, email) => {
       data = await resp.text();
     }
 
-    // Prioriza init_point (producción) y si no, sandbox_init_point (dev)
-    let url =
-      typeof data === "string"
-        ? data
-        : data?.init_point || data?.sandbox_init_point || "";
+    // Detecta entorno para elegir init_point vs sandbox_init_point
+    const mpEnv =
+      (typeof import.meta !== "undefined" && import.meta?.env?.VITE_MP_ENV) ||
+      (typeof process !== "undefined" && process?.env?.VITE_MP_ENV) ||
+      (typeof process !== "undefined" && process?.env?.MP_ENV) ||
+      "";
+
+    const preferSandbox =
+      String(mpEnv).toLowerCase() === "sandbox" ||
+      (onBrowser && origin && origin.includes("localhost"));
+
+    let url;
+    if (typeof data === "string") {
+      url = data;
+    } else if (preferSandbox) {
+      // En sandbox/local preferimos sandbox_init_point para poder usar tarjetas/usuarios de prueba
+      url = data?.sandbox_init_point || data?.init_point || "";
+    } else {
+      // En producción preferimos init_point
+      url = data?.init_point || data?.sandbox_init_point || "";
+    }
 
     if (!url || !/^https?:\/\//i.test(url)) {
       throw new Error("Respuesta sin init_point válido.");
