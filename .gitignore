@@ -34,3 +34,6 @@ backend.log
 # envs
 .env
 .env.*
+.cursor/
+.cursor/
+.cursor/

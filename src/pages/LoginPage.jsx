@@ -75,13 +75,8 @@ const LoginPage = () => {
           localStorage.getItem("post_login_redirect")) ||
         "/mi-negocio";
 
-      // Detecta si estamos usando HashRouter (hay hash presente en la URL)
-      const usesHashRouter =
-        typeof window !== "undefined" && window.location.hash !== "";
-      const callbackPath = usesHashRouter
-        ? "/#/auth/callback"
-        : "/auth/callback";
-      const callback = `${origin}${callbackPath}?redirect=${encodeURIComponent(
+      // ✅ Redirige SIEMPRE a /auth/callback (BrowserRouter)
+      const callback = `${origin}/auth/callback?redirect=${encodeURIComponent(
         after
       )}`;
 
@@ -93,7 +88,7 @@ const LoginPage = () => {
 
       const { error } = await supabase.auth.signInWithOtp({
         email,
-        options: { emailRedirectTo: callback },
+        options: { emailRedirectTo: callback, shouldCreateUser: true },
       });
       if (error) throw error;
       setSent(true);

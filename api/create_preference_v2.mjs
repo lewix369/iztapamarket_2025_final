@@ -1,250 +1,154 @@
-import fetch from "node-fetch";
+// api/create_preference_v2.mjs
+// Versión FINAL: Checkout Pro + auto_return, back_urls garantizadas y webhook correcto.
 
-/**
- * Crea una preferencia de pago (MP Checkout v1).
- * - Usa MP_ACCESS_TOKEN del entorno (sandbox/prod según tu .env)
- * - Devuelve { ok:true, id, init_point, sandbox_init_point }
- */
-export default async function createPreferenceV2(req, res) {
+export default async function createPreferenceV2(accessToken, body, diag, res) {
   try {
-    // 1) Token (idéntico a /diag/mp-sanity)
-    const rawToken = (
-      process.env.MP_ACCESS_TOKEN ||
-      process.env.MP_SANDBOX_ACCESS_TOKEN ||
-      process.env.MP_PROD_ACCESS_TOKEN ||
-      ""
-    ).trim();
+    console.log("💳 [v2] Create Preference V2 (FINAL)");
 
-    if (!rawToken) {
-      console.error("[MP:v2] missing MP access token");
+    if (!accessToken) {
+      console.error("[v2] ERROR: Falta ACCESS TOKEN");
       return res.status(500).json({
         ok: false,
-        error: "MP token missing",
+        error: "no_access_token",
+        message: "Access token de Mercado Pago no configurado",
       });
     }
 
-    // Log corto para verificar que es el mismo token que /diag
-    console.log("[MP:v2] token sanity", {
-      prefix: rawToken.slice(0, 8), // "TEST-USR" o "APP_USR-"
-      suffix: rawToken.slice(-6),
-      len: rawToken.length,
-    });
+    // ----------------------------
+    // Normalización de datos
+    // ----------------------------
+    const rawPlan = String(body.plan || body.plan_type || "").toLowerCase().trim();
 
-    // === Env awareness (sandbox/prod) & default test buyer for sandbox ===
-    const ENV = (String(process.env.MP_ENV || "") || "sandbox").toLowerCase();
-    const TEST_BUYER = (
-      process.env.MP_TEST_BUYER_EMAIL || "TESTUSER16368732@testuser.com"
-    )
+    const plan =
+      rawPlan === "premium"
+        ? "premium"
+        : rawPlan === "pro" || rawPlan === "profesional"
+        ? "pro"
+        : null;
+
+    const email = String(body.email || body.payer_email || body.buyer_email || "")
       .trim()
       .toLowerCase();
 
-    // 2) Body (plan/email obligatorios)
-    const {
-      plan,
-      email,
-      userId,
-      title = `Suscripción ${plan || ""}`,
-      quantity = 1,
-      unit_price, // opcional: si no viene, lo define el plan
-    } = req.body || {};
-
-    // En SANDBOX forzamos el comprador de prueba para que las tarjetas test (APRO) pasen.
-    const payerEmail = (ENV === "sandbox" ? TEST_BUYER : String(email || ""))
-      .trim()
-      .toLowerCase();
-
-    if (!plan || !email) {
+    if (!plan) {
       return res.status(400).json({
         ok: false,
-        error: "Missing plan or email",
+        error: "invalid_plan",
+        message: `Plan inválido: ${rawPlan}`,
       });
     }
 
-    // 3) Precio por plan (fallback)
-    const PLAN_PRICES = {
-      free: 0,
-      pro: 300,
-      premium: 500,
-    };
-    const price = Number(
-      unit_price ?? PLAN_PRICES[String(plan).toLowerCase()] ?? 0
-    );
+    if (!email) {
+      return res.status(400).json({
+        ok: false,
+        error: "invalid_email",
+        message: "Email del pagador es obligatorio",
+      });
+    }
 
-    // 4) back_urls y webhook (mismo mecanismo que /diag)
-    const trim = (s = "") => s.replace(/\/+$/, "");
-    const FE = trim(process.env.FRONTEND_URL || "");
-    const PB = trim(process.env.PUBLIC_BASE_URL || "");
+    const PRICE_BY_PLAN = { pro: 50, premium: 50 };
+    const unitPrice = PRICE_BY_PLAN[plan];
 
-    // Preferir FRONTEND_URL HTTPS para permitir auto_return; si no hay, caer a overrides/HTTP
-    const isHttps = (u = "") => /^https:\/\//i.test(u);
-    const pickUrl = (path) => {
-      const fe = FE ? `${FE}${path}` : "";
-      const pb = PB ? `${PB}${path}` : "";
+    const title = `Plan ${plan === "pro" ? "Pro" : "Premium"} - IztapaMarket`;
 
-      // 1) Si FRONTEND_URL es https, usarla primero
-      if (isHttps(fe)) return fe;
+    const externalReference = `${email}|${plan}|web`;
 
-      // 2) Si hay override explícito por env, usarlo (puede ser http en local)
-      //    NOTA: para cada path se pasa la variable correspondiente más abajo
-      return { fe, pb };
-    };
+    // ----------------------------
+    // Webhook
+    // ----------------------------
 
-    const successOverride = (process.env.REGISTRO_SUCCESS_URL || "").trim();
-    const failureOverride = (process.env.REGISTRO_FAILURE_URL || "").trim();
-    const pendingOverride = (process.env.REGISTRO_PENDING_URL || "").trim();
+    const notificationUrl =
+      process.env.MP_WEBHOOK_URL ||
+      diag?.mp?.webhook ||
+      "http://localhost:3001/webhook_mp";
 
-    const pickedSuccess = pickUrl("/pago/success");
-    const pickedFailure = pickUrl("/pago/failure");
-    const pickedPending = pickUrl("/pago/pending");
+    // ----------------------------
+    // back_urls + auto_return
+    // ----------------------------
+    const baseUrl = process.env.PUBLIC_BASE_URL || "http://localhost:3001";
+    const isHttps = baseUrl.startsWith("https://"); // 👈 SOLO aquí decidimos auto_return
 
-    const success = isHttps(pickedSuccess)
-      ? pickedSuccess
-      : successOverride || pickedSuccess.fe || pickedSuccess.pb || "";
-    const failure = isHttps(pickedFailure)
-      ? pickedFailure
-      : failureOverride || pickedFailure.fe || pickedFailure.pb || "";
-    const pending = isHttps(pickedPending)
-      ? pickedPending
-      : pendingOverride || pickedPending.fe || pickedPending.pb || "";
-
-    const notification_url =
-      process.env.MP_WEBHOOK_URL || (PB ? `${PB}/webhook_mp` : "") || undefined;
-
-    // back_urls con email/plan para que PaySuccess resuelva sin polling
-    const addParams = (u, extra = {}) => {
-      if (!u) return "";
-      try {
-        const url = new URL(u);
-        Object.entries(extra).forEach(([k, v]) => {
-          if (v !== undefined && v !== null && String(v).trim() !== "") {
-            url.searchParams.set(k, String(v));
-          }
-        });
-        return url.toString();
-      } catch {
-        // fallback para URLs no absolutas
-        const qs = new URLSearchParams(
-          Object.fromEntries(
-            Object.entries(extra).filter(
-              ([, v]) =>
-                v !== undefined && v !== null && String(v).trim() !== ""
-            )
-          )
-        ).toString();
-        return qs ? `${u}${u.includes("?") ? "&" : "?"}${qs}` : u;
-      }
+    const backUrls = {
+      success: `${baseUrl}/pago/success`,
+      failure: `${baseUrl}/pago/failure`,
+      pending: `${baseUrl}/pago/pending`,
     };
 
-    const successW = addParams(success, { email, plan });
-    const failureW = addParams(failure, { email, plan });
-    const pendingW = addParams(pending, { email, plan });
+    console.log("🔗 [v2] back_urls:", backUrls, "isHttps:", isHttps);
 
-    const back_urls =
-      successW || failureW || pendingW
-        ? {
-            ...(successW ? { success: successW } : {}),
-            ...(failureW ? { failure: failureW } : {}),
-            ...(pendingW ? { pending: pendingW } : {}),
-          }
-        : undefined;
-
-    // Sólo habilitar auto_return si existe success HTTPS (sandbox/prod) para evitar "invalid_auto_return"
-    const allowAutoReturn =
-      !!(back_urls && back_urls.success) &&
-      /^https:\/\//i.test(back_urls.success);
-
-    console.log("[MP:v2] creating preference", {
-      env: ENV,
-      payer_email: payerEmail,
-      item_id: `plan_${plan}`,
-      category_id: "services",
-      price,
-      back_urls,
-      allowAutoReturn,
-      notification_url, // log the exact URL we are sending
-    });
-
-    // 5) Payload MP
-    const payload = {
+    // ----------------------------
+    // Payload FINAL a MP
+    // ----------------------------
+    const preferencePayload = {
       items: [
         {
-          id: `plan_${plan}`,
           title,
-          description: `Plan ${plan} IztapaMarket`,
-          quantity: Number(quantity) || 1,
-          unit_price: price,
+          quantity: 1,
+          unit_price: unitPrice,
           currency_id: "MXN",
-          category_id: "services",
         },
       ],
-      payer: { email: payerEmail },
-      ...(back_urls ? { back_urls } : {}),
-      ...(allowAutoReturn ? { auto_return: "approved" } : {}),
-      notification_url,
-      external_reference: `${email}|${plan}|iztapa`,
-      metadata: {
-        plan,
-        userId: userId || null,
-        source: "iztapamarket:v2",
-        email_for_backoffice: email,
-      },
+
+      payer: { email },
+
+      external_reference: externalReference,
+      notification_url: notificationUrl,
+
+      back_urls: backUrls,
     };
 
-    // 6) Llamada a MP (con Authorization: Bearer)
-    const r = await fetch("https://api.mercadopago.com/checkout/preferences", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${rawToken}`,
-      },
-      body: JSON.stringify(payload),
-    });
+    // ⚠️ IMPORTANTE:
+    // En LOCAL (http://localhost:3001) NO mandamos auto_return porque MP se queja.
+    // En NGROK / PRODUCCIÓN (https://...) SÍ lo mandamos.
+    if (isHttps) {
+      preferencePayload.auto_return = "approved"; // << CLAVE PARA SALIR DEL CHECKOUT
+    }
 
-    const j = await r.json().catch(() => ({}));
+    console.log("📦 [v2] Payload enviado a MP:", preferencePayload);
 
-    try {
-      if (j && (j.site_id || j.id)) {
-        console.log("[MP:v2] preference created", {
-          id: j.id || null,
-          site_id: j.site_id || null,
-          collector_id: j.collector_id || null,
-          has_init_point: Boolean(j.init_point || j.sandbox_init_point),
-        });
+    // ----------------------------
+    // Llamada a Mercado Pago
+    // ----------------------------
+    const mpResp = await fetch(
+      "https://api.mercadopago.com/checkout/preferences",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify(preferencePayload),
       }
-    } catch {}
+    );
 
-    if (!r.ok) {
-      console.error("[MP:v2] MP error", {
-        status: r.status,
-        message: j.message,
-        error: j.error,
-        cause: j.cause,
-      });
-      return res.status(500).json({
+    const data = await mpResp.json().catch(() => null);
+
+    if (!mpResp.ok) {
+      console.error("❌ [v2] ERROR MP:", data);
+      return res.status(mpResp.status).json({
         ok: false,
-        error: "Error creando preferencia",
-        detail: j.message || j.error || "mp_error",
-        cause: j.cause || null,
+        error: "mp_error",
+        details: data,
       });
     }
 
-    // 7) Respuesta compacta para el frontend Wallet
+    console.log("✅ [v2] Preferencia creada:", {
+      id: data?.id,
+      init_point: data?.init_point,
+    });
+
     return res.status(201).json({
       ok: true,
-      id: j.id || null,
-      site_id: j.site_id || null,
-      collector_id: j.collector_id || null,
-      init_point: j.init_point || null,
-      sandbox_init_point: j.sandbox_init_point || null,
-      debug: {
-        notification_url: notification_url || null,
-        back_urls: back_urls || null,
-        env: ENV,
-        price,
-      },
+      id: data.id,
+      init_point: data.init_point,
+      sandbox_init_point: data.sandbox_init_point,
     });
-  } catch (e) {
-    console.error("[MP:v2] exception", e);
-    return res.status(500).json({ ok: false, error: String(e) });
+  } catch (err) {
+    console.error("🔥 [v2] EXCEPTION:", err);
+    return res.status(500).json({
+      ok: false,
+      error: "exception",
+      message: err.message,
+    });
   }
 }

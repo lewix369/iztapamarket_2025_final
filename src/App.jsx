@@ -38,15 +38,14 @@ import PaySuccess from "@/pages/PaySuccess";
 import PayFailure from "@/pages/PayFailure";
 import PayPending from "@/pages/PayPending";
 import Checkout from "@/pages/Checkout";
+// import MagicLinkBridge from "@/pages/MagicLinkBridge"; // ← removido
 
 function RedirectRegisterBusiness() {
-  // Mantén todos los query params (plan, email, status, etc.)
   const q = window.location.search || "";
   return <Navigate to={`/registro${q}`} replace />;
 }
 
 function RedirectRegisterTier() {
-  // e.g. /registro/free -> /registro?plan=free (preserva otros query params)
   const { tier } = useParams();
   const q = new URLSearchParams(window.location.search);
   if (!q.get("plan") && tier) q.set("plan", tier.toLowerCase());
@@ -75,35 +74,41 @@ function Layout() {
       {!shouldHide && <Header />}
       <main className="flex-grow">
         <Routes>
+          {/* Home sin bridge (ya rediriges a /auth/callback desde el email) */}
           <Route path="/" element={<Home />} />
+
           <Route path="/negocios" element={<BusinessListPage />} />
-          <Route path="/negocios/:slug" element={<CategoryBusinessesPage />} />
+
+          {/* 🔧 FIX: detalle de negocio por slug correcto */}
+          <Route path="/negocios/:slug" element={<BusinessDetailPage />} />
+
           <Route path="/negocio/:slug" element={<BusinessDetailPage />} />
           <Route path="/precios" element={<Precios />} />
           <Route path="/planes" element={<Precios />} />
           <Route path="/checkout" element={<Checkout />} />
+
+          {/* Callbacks de pago */}
           <Route path="/pago/success" element={<PaySuccess />} />
           <Route path="/pago/failure" element={<PayFailure />} />
           <Route path="/pago/pending" element={<PayPending />} />
 
           {/* RUTA DE REGISTRO OFICIAL */}
           <Route path="/registro" element={<RegisterBusinessPage />} />
-
           <Route path="/registro/:tier" element={<RedirectRegisterTier />} />
 
-          {/* COMPATIBILIDAD: redirigimos la vieja ruta */}
+          {/* Compat: ruta vieja */}
           <Route
             path="/register-business"
             element={<RedirectRegisterBusiness />}
           />
 
-          {/* ✅ Ajustado: ahora /registro-success también usa PaySuccess */}
+          {/* Aliases adicionales / compat */}
           <Route path="/registro-success" element={<PaySuccess />} />
           <Route path="/registro-exitoso" element={<PaySuccess />} />
           <Route path="/registro-error" element={<PayFailure />} />
           <Route path="/registro-pendiente" element={<PayPending />} />
-
-          {/* Aliases para callbacks directos de Mercado Pago */}
+          {/* Alias adicional: éxito de registro con slash */}
+          <Route path="/registro/exitoso" element={<RegistroFreeSuccess />} />
           <Route path="/pay-success" element={<PaySuccess />} />
           <Route path="/pay-failure" element={<PayFailure />} />
           <Route path="/pay-pending" element={<PayPending />} />
@@ -148,6 +153,9 @@ function Layout() {
           <Route path="/test-pago" element={<TestPago />} />
           <Route path="/auth/callback" element={<AuthCallbackPage />} />
           <Route path="/debug-user" element={<DebugUser />} />
+
+          {/* 🚧 Catch-all para rutas desconocidas */}
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
       {!shouldHide && <Footer />}

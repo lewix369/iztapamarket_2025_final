@@ -5,7 +5,173 @@ import { createClient } from "@supabase/supabase-js";
 
 console.log("🔔 webhook_mp VERSION=2025-09-18_02");
 
+// Duraciones por plan (se pueden sobreescribir por ENV)
+const PLAN_DAYS_DEFAULT = Number(process.env.PLAN_DURATION_DAYS || 30); // compat
+const PLAN_DAYS_PREMIUM = Number(process.env.PLAN_DAYS_PREMIUM || process.env.PLAN_DURATION_DAYS_PREMIUM || 365);
+const PLAN_DAYS_PRO = Number(process.env.PLAN_DAYS_PRO || process.env.PLAN_DURATION_DAYS_PRO || 365);
+const PLAN_DAYS_BASICO = Number(process.env.PLAN_DAYS_BASICO || process.env.PLAN_DURATION_DAYS_BASICO || 0);
+
 const router = express.Router();
+
+/* ─────────────────────────── Keydump seguro ─────────────────────────── */
+// NO imprime claves: solo presencia, longitudes y máscaras
+router.get("/__keydump", (_req, res) => {
+  const pick = (name) => {
+    const v = process.env[name] || "";
+    const mask =
+      v && v.length > 12 ? v.slice(0, 6) + "…" + v.slice(-6) : v || null;
+    return {
+      present: !!v,
+      len: v ? v.length : 0,
+      mask,
+      start: v ? String(v).slice(0, 12) : null,
+      end: v ? String(v).slice(-12) : null,
+    };
+  };
+
+  const used = (function () {
+    const candidates = [
+      ["SUPABASE_SERVICE_ROLE", process.env.SUPABASE_SERVICE_ROLE],
+      ["SUPABASE_SERVICE_ROLE_KEY", process.env.SUPABASE_SERVICE_ROLE_KEY],
+      ["SUPABASE_SERVICE_KEY", process.env.SUPABASE_SERVICE_KEY],
+      ["SUPABASE_API_KEY", process.env.SUPABASE_API_KEY],
+      ["SUPABASE_ANON_KEY", process.env.SUPABASE_ANON_KEY],
+      ["VITE_SUPABASE_ANON_KEY", process.env.VITE_SUPABASE_ANON_KEY],
+    ];
+    for (const [n, v] of candidates) {
+      if (v && String(v).trim()) return { name: n, value: String(v) };
+    }
+    return { name: null, value: "" };
+  })();
+
+  const maskUsed = used.value
+    ? used.value.length > 12
+      ? used.value.slice(0, 6) + "…" + used.value.slice(-6)
+      : used.value
+    : null;
+
+  res.json({
+    usedSource: used.name || null,
+    usedLen: used.value ? used.value.length : 0,
+    usedMask: maskUsed,
+    keys: {
+      SUPABASE_SERVICE_ROLE: pick("SUPABASE_SERVICE_ROLE"),
+      SUPABASE_SERVICE_ROLE_KEY: pick("SUPABASE_SERVICE_ROLE_KEY"),
+      SUPABASE_SERVICE_KEY: pick("SUPABASE_SERVICE_KEY"),
+      SUPABASE_API_KEY: pick("SUPABASE_API_KEY"),
+      SUPABASE_ANON_KEY: pick("SUPABASE_ANON_KEY"),
+      VITE_SUPABASE_ANON_KEY: pick("VITE_SUPABASE_ANON_KEY"),
+    },
+  });
+});
+
+/* ──────────────────────────── Utils ──────────────────────────── */
+function maskKey(k) {
+  if (!k) return null;
+  const v = String(k);
+  if (v.length <= 12) return v;
+  return `${v.slice(0, 6)}…${v.slice(-6)}`;
+}
+
+// Resolve which env var we actually used for the Service Role key (for diagnostics)
+function resolveServiceRoleKey() {
+  // detecta placeholders/valores inválidos
+  const isLikelyPlaceholder = (val) => {
+    const v = String(val || "").trim();
+    if (!v) return true;
+    if (/TU[_-]?SERVICE[_-]?ROLE[_-]?REAL/i.test(v)) return true;
+    if (/YOUR[_-]?SERVICE[_-]?ROLE/i.test(v)) return true;
+    // SRK reales son JWT largos (~200+). Acepta >=80 como "plausible".
+    if (v.length < 80) return true;
+    return false;
+  };
+
+  // Preferir variables service-role reales primero
+  const candidates = [
+    ["SUPABASE_SERVICE_ROLE", process.env.SUPABASE_SERVICE_ROLE],
+    ["SUPABASE_SERVICE_ROLE_KEY", process.env.SUPABASE_SERVICE_ROLE_KEY],
+    ["SUPABASE_SERVICE_KEY", process.env.SUPABASE_SERVICE_KEY],
+    ["SUPABASE_API_KEY", process.env.SUPABASE_API_KEY],
+  ];
+  for (const [name, val] of candidates) {
+    if (val && !isLikelyPlaceholder(val)) {
+      return { name, value: String(val) };
+    }
+  }
+
+  // En sandbox permitir caer a ANON (muchas veces espejado al SRK por server.mjs)
+  const notProd =
+    String(process.env.MP_ENV || process.env.NODE_ENV || "sandbox").toLowerCase() !== "production" ||
+    process.env.MP_FORCE_SANDBOX === "1" ||
+    process.env.VITE_FORCE_SANDBOX === "1" ||
+    process.env.ALLOW_ANON_AS_SERVICE_ROLE === "1";
+
+  if (notProd) {
+    const anonCandidates = [
+      ["SUPABASE_ANON_KEY", process.env.SUPABASE_ANON_KEY],
+      ["VITE_SUPABASE_ANON_KEY", process.env.VITE_SUPABASE_ANON_KEY],
+    ];
+    for (const [name, val] of anonCandidates) {
+      if (val && !isLikelyPlaceholder(val)) {
+        return { name, value: String(val) };
+      }
+    }
+  }
+
+  return { name: null, value: "" };
+}
+
+/* ── Supabase (Service Role – SOLO backend) — lazy init ─ */
+let __sb = null;
+let __sbOnceLogged = false;
+
+function getSupabase() {
+  if (__sb) return __sb;
+
+  const url =
+    process.env.SUPABASE_URL ||
+    process.env.VITE_SUPABASE_URL ||
+    "";
+
+  // STRICTLY service-role style sources; do NOT use anon here
+  const { name: keySource, value: key } = resolveServiceRoleKey();
+
+  if (!url || !key) {
+    if (!__sbOnceLogged) {
+      console.warn(
+        "[webhook_mp] ❗ SUPABASE_URL / Service Role key ausentes; no se escribirá en DB.",
+        { hasUrl: !!url, hasServiceRole: !!key, keySource }
+      );
+      __sbOnceLogged = true;
+    }
+    return null;
+  }
+
+  try {
+    __sb = createClient(url, key, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    if (!__sbOnceLogged) {
+      console.log("[webhook_mp] ✅ Supabase admin listo", {
+        urlHost: (() => {
+          try {
+            return new URL(url).host;
+          } catch {
+            return url;
+          }
+        })(),
+        keySource,
+        keyLen: key.length,
+        keyMask: maskKey(key),
+      });
+      __sbOnceLogged = true;
+    }
+  } catch (e) {
+    console.error("[webhook_mp] createClient error:", e?.message || e);
+    __sb = null;
+  }
+  return __sb;
+}
 
 /* ── Body parser para TODO el router ─────────────────────────── */
 router.use(express.json({ type: "*/*" }));
@@ -14,7 +180,8 @@ router.use(express.json({ type: "*/*" }));
 router.use((req, res, next) => {
   const required = process.env.MP_WEBHOOK_SECRET || "";
   if (!required) return next(); // desactivado si no se define
-  // Sources we accept for the token:
+
+  // Sources aceptados:
   // 1) query ?token=...
   // 2) header x-webhook-token
   // 3) Authorization: Bearer <token>
@@ -43,48 +210,73 @@ if (!process.env.MP_ACCESS_TOKEN) {
   }
 }
 
-/* ── Supabase (Service Role – SOLO backend) — lazy init to evitar crash si faltan ENVs ─ */
-let __sb = null;
-function getSupabase() {
-  if (__sb) return __sb;
-  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
-  const key =
-    process.env.SUPABASE_SERVICE_ROLE ||
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    "";
-  if (!url || !key) {
-    console.warn(
-      "[webhook_mp] SUPABASE_URL/SUPABASE_SERVICE_ROLE faltan; se omite actualización en DB."
-    );
-    return null;
-  }
-  try {
-    __sb = createClient(url, key, { auth: { persistSession: false } });
-  } catch (e) {
-    console.error("[webhook_mp] createClient error:", e?.message || e);
-    __sb = null;
-  }
-  return __sb;
-}
-
-/* ── Helpers de base de datos ────────────────────────────────── */
-async function updatePlanByEmail(email, plan) {
+/* ─────────────────────── Helpers de negocio ─────────────────── */
+async function updatePlanByEmail(email, plan, durationDays) {
   if (!email || !plan) return { ok: false, error: "email/plan faltan" };
+
   const sb = getSupabase();
   if (!sb) return { ok: false, error: "supabase_not_configured" };
 
-  const payload = {
-    email: String(email).toLowerCase(),
-    plan_type: String(plan).toLowerCase(),
-    updated_at: new Date().toISOString(),
-  };
+  const emailLower = String(email).trim().toLowerCase();
+  const planNorm = String(plan).trim().toLowerCase();
+  const addDays =
+    Number(durationDays) > 0
+      ? Math.round(Number(durationDays))
+      : getPlanDurationDays(planNorm);
+
+  // 1) Leer perfil actual para calcular acumulación cuando corresponda
+  const { data: existing, error: qErr } = await sb
+    .from("profiles")
+    .select("id, email, plan_type, plan_expires_at")
+    .ilike("email", emailLower)
+    .maybeSingle();
+
+  if (qErr) return { ok: false, error: qErr.message };
+
+  const now = new Date();
+
+  // Si no hay días a sumar (planes no-pagados), dejamos expiración en NULL
+  let expiresAt = null;
+  if (addDays > 0) {
+    const baseDate =
+      existing?.plan_expires_at && new Date(existing.plan_expires_at) > now
+        ? new Date(existing.plan_expires_at)
+        : now;
+    expiresAt = new Date(
+      baseDate.getTime() + addDays * 24 * 60 * 60 * 1000
+    ).toISOString();
+  }
+
+  if (existing?.id) {
+    const { data, error } = await sb
+      .from("profiles")
+      .update({
+        plan_type: planNorm,
+        plan_expires_at: expiresAt, // puede ser null para basico/free
+        updated_at: now.toISOString(),
+      })
+      .eq("id", existing.id)
+      .select("id, email, plan_type, plan_expires_at, updated_at")
+      .single();
+    if (error) return { ok: false, error: error.message };
+    return { ok: true, mode: "update", data };
+  }
+
   const { data, error } = await sb
     .from("profiles")
-    .upsert(payload, { onConflict: "email" })
-    .select("email, plan_type, updated_at")
+    .upsert(
+      {
+        email: emailLower,
+        plan_type: planNorm,
+        plan_expires_at: expiresAt, // puede ser null
+        updated_at: now.toISOString(),
+      },
+      { onConflict: "email" }
+    )
+    .select("id, email, plan_type, plan_expires_at, updated_at")
     .single();
   if (error) return { ok: false, error: error.message };
-  return { ok: true, data };
+  return { ok: true, mode: "insert", data };
 }
 
 async function upsertBusinessByEmail({ email, plan, external_reference }) {
@@ -144,74 +336,228 @@ async function upsertBusinessByEmail({ email, plan, external_reference }) {
 }
 
 // Acción común cuando el pago quedó aprobado
-async function handleApproved({ email, plan, external_reference }) {
-  const [uProfile, uBusiness] = await Promise.all([
-    updatePlanByEmail(email, plan),
-    upsertBusinessByEmail({ email, plan, external_reference }),
-  ]);
-  return { uProfile, uBusiness };
+async function handleApproved({ email, plan, external_reference, durationDays }) {
+  const uProfile = await updatePlanByEmail(email, plan, durationDays);
+  const uBusiness = await upsertBusinessByEmail({
+    email,
+    plan,
+    external_reference,
+  });
+  return {
+    uProfile,
+    uBusiness,
+    plan_duration_days: durationDays || getPlanDurationDays(plan),
+  };
 }
 
-/* ── Otros helpers ───────────────────────────────────────────── */
+/* ───────────────────────── Otros helpers ────────────────────── */
 function isPaymentEvent(type, action) {
   const t = String(type || "");
   const a = String(action || "");
   return t.includes("payment") || a.includes("payment");
 }
 
-// Extrae paymentId de body/query/resource
-function extractPaymentId(reqBody = {}, reqQuery = {}) {
-  const fromBody = reqBody?.data?.id || reqBody?.id || null;
-  const fromQuery =
-    reqQuery?.id || reqQuery?.["data.id"] || reqQuery?.["data.id[]"] || null;
+// Extrae el payment_id de body o query para notificaciones de pago
+function extractPaymentId(body, query) {
+  // Puede venir en varios lugares según el tipo de notificación
+  // 1) query.id
+  // 2) body.data.id
+  // 3) body.id
+  // 4) body.resource (ej: /v1/payments/123456)
+  let id =
+    query?.id ??
+    body?.data?.id ??
+    body?.id ??
+    (body?.resource
+      ? (String(body.resource).match(/payments\/(\d+)/) || [null, null])[1]
+      : null);
 
-  // Formato viejo: ?topic=payment&id=123
-  if (reqQuery?.topic?.includes?.("payment") && fromQuery)
-    return String(fromQuery);
-
-  // Recurso como URL: { resource: "https://api.mercadopago.com/v1/payments/123" }
-  const resource = reqBody?.resource || reqQuery?.resource || "";
-  const m = String(resource).match(/\/v1\/payments\/(\d+)/);
-  const fromResource = m ? m[1] : null;
-
-  return String(fromBody || fromQuery || fromResource || "").trim() || null;
+  if (id != null) id = String(id).trim();
+  return id || null;
 }
 
-function extractExternalReference(body = {}, mpPayment = null) {
-  return (
-    mpPayment?.external_reference ||
-    body?.data?.external_reference ||
-    body?.external_reference ||
-    null
-  );
-}
-
-function isValidEmail(s) {
-  if (typeof s !== "string") return false;
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  return emailRegex.test(s.trim());
+/* ──────────────────────── Idempotencia pagos ──────────────────────── */
+/**
+ * Intenta registrar un pago aprobado una sola vez.
+ * Si ya existe (violación de índice único payment_id), devuelve { duplicate: true }.
+ */
+async function recordPaymentApproved({ payment_id, email, plan, external_reference, payload }) {
+  const sb = getSupabase();
+  if (!sb) return { ok: false, reason: "no_admin_client" };
+  try {
+    const row = {
+      payment_id: String(payment_id),
+      email: email ? String(email).toLowerCase() : null,
+      plan_type: plan ? String(plan).toLowerCase() : null,
+      external_reference: external_reference || null,
+      payload: payload || null,
+    };
+    const { error } = await sb.from("pagos").insert([row]);
+    if (error) {
+      // 23505 = unique_violation (ya existe payment_id)
+      if (error.code === "23505") {
+        return { ok: true, duplicate: true };
+      }
+      return { ok: false, error: error.message, code: error.code };
+    }
+    return { ok: true, duplicate: false };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) };
+  }
 }
 
 function parseExternalRefString(refStr) {
-  // expected format: email|plan|tag
-  if (typeof refStr !== "string" || !refStr.includes("|")) {
-    return { email: null, plan: null, tag: null };
+  // Formats soportados:
+  // 1) pipe-based:  email|plan|tag|durationDays
+  // 2) query-like:  email=a@b.com&plan=premium&tag=foo&duration=365 | months=12 | years=1
+  const out = {
+    email: null,
+    plan: null,
+    tag: null,
+    duration: null,
+    months: null,
+    years: null,
+  };
+  if (typeof refStr !== "string" || !refStr.trim()) return out;
+  const raw = refStr.trim();
+
+  const toEmail = (s) => {
+    if (typeof s !== "string") return null;
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const v = s.trim().toLowerCase();
+    return emailRegex.test(v) ? v : null;
+  };
+  const toPlan = (s) => {
+    const p = String(s || "").toLowerCase();
+    const valid = [
+      "premium",
+      "pro",
+      "basico",
+      "básico",
+      "basic",
+      "free",
+      "gratuito",
+    ];
+    if (!valid.includes(p)) return null;
+    return p === "básico" || p === "basic" ? "basico" : p;
+  };
+  const toNum = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
+  };
+
+  // (A) pipe format
+  if (raw.includes("|")) {
+    const [rawEmail, rawPlan, rawTag, rawDuration] = raw.split("|");
+    return {
+      email: toEmail(rawEmail),
+      plan: toPlan(rawPlan),
+      tag: rawTag ? String(rawTag).trim() : null,
+      duration: toNum(rawDuration),
+      months: null,
+      years: null,
+    };
   }
-  const [rawEmail, rawPlan, rawTag] = refStr.split("|");
-  const email = isValidEmail(rawEmail) ? rawEmail.trim().toLowerCase() : null;
-  const p = String(rawPlan || "").toLowerCase();
-  const validPlans = ["premium", "pro", "basico", "básico", "basic"]; // accept accents & alias
-  const plan = validPlans.includes(p) ? (p === "básico" ? "basico" : p) : null;
-  const tag = rawTag ? String(rawTag).trim() : null;
-  return { email, plan, tag };
+
+  // (B) query-string-like format
+  try {
+    const qs = raw.startsWith("?") ? raw.slice(1) : raw;
+    const params = new URLSearchParams(qs);
+    const email = toEmail(params.get("email"));
+    const plan = toPlan(params.get("plan"));
+    const tag = params.get("tag") ? String(params.get("tag")).trim() : null;
+    const duration = toNum(
+      params.get("duration") || params.get("duration_days")
+    );
+    const months = toNum(params.get("months"));
+    const years = toNum(params.get("years"));
+    if (email || plan || tag || duration || months || years) {
+      return { email, plan, tag, duration, months, years };
+    }
+  } catch {}
+
+  return out;
 }
 
-/* ── Diagnóstico ─────────────────────────────────────────────── */
+function getPlanDurationDays(plan) {
+  const p = String(plan || "").toLowerCase();
+  if (p === "premium") return PLAN_DAYS_PREMIUM || PLAN_DAYS_DEFAULT;
+  if (p === "pro") return PLAN_DAYS_PRO || PLAN_DAYS_DEFAULT;
+  if (p === "basico" || p === "basic" || p === "free" || p === "gratuito")
+    return PLAN_DAYS_BASICO || 0;
+  return PLAN_DAYS_DEFAULT;
+}
+
+function coercePositiveInt(v) {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
+}
+
+function effectiveDurationDays(plan, parsed = {}, meta = {}) {
+  // 1) Metadata explícita del pago
+  let days =
+    coercePositiveInt(meta?.duration_days) ||
+    coercePositiveInt(meta?.duration) ||
+    null;
+
+  // 2) Hints en external_reference parseado
+  if (!days) {
+    days =
+      coercePositiveInt(parsed?.duration) ||
+      (parsed?.years ? coercePositiveInt(parsed.years * 365) : null) ||
+      (parsed?.months ? coercePositiveInt(parsed.months * 30) : null) ||
+      null;
+  }
+
+  // 3) Fallback por tipo de plan
+  if (!days) days = getPlanDurationDays(plan);
+
+  return days || getPlanDurationDays(plan);
+}
+
+function mpApi(path) {
+  // Always use the public API host; account environment is defined by the access token.
+  const base = "https://api.mercadopago.com";
+  return `${base}${path.startsWith("/") ? path : "/" + path}`;
+}
+
+async function persistNotificationRaw(body) {
+  const sb = getSupabase();
+  if (!sb) return { ok: false, reason: "no_admin_client" };
+  try {
+    const topic =
+      body?.topic ||
+      body?.type ||
+      (typeof body?.action === "string" && body.action.includes("payment")
+        ? "payment"
+        : "unknown");
+
+    const { error } = await sb
+      .from("mp_notifications")
+      .insert([{ topic, payload: body }]);
+
+    if (error)
+      return {
+        ok: false,
+        reason: "insert_notification_failed",
+        error: error.message,
+      };
+    return { ok: true };
+  } catch (e) {
+    return {
+      ok: false,
+      reason: "insert_notification_exception",
+      error: String(e),
+    };
+  }
+}
+
+/* ───────────────────────── Diagnóstico ──────────────────────── */
 router.all("/__version", (_req, res) => {
   res.json({ ok: true, version: "2025-09-18_02" });
 });
 
-// Diagnóstico rápido de ENVs en Vercel
+// Diagnóstico rápido de ENVs
 router.get("/__env", (_req, res) => {
   const fp = (v = "") =>
     v ? `${String(v).slice(0, 6)}…${String(v).slice(-4)}` : null;
@@ -224,7 +570,9 @@ router.get("/__env", (_req, res) => {
       ),
       SUPABASE_SERVICE_ROLE: !!(
         process.env.SUPABASE_SERVICE_ROLE ||
-        process.env.SUPABASE_SERVICE_ROLE_KEY
+        process.env.SUPABASE_SERVICE_ROLE_KEY ||
+        process.env.SUPABASE_SERVICE_KEY ||
+        process.env.SUPABASE_API_KEY
       ),
       MP_WEBHOOK_SECRET: !!process.env.MP_WEBHOOK_SECRET,
       fingerprints: {
@@ -234,7 +582,102 @@ router.get("/__env", (_req, res) => {
   });
 });
 
-/* ── Ping / prueba manual (?test=1) ──────────────────────────── */
+// Deep self test for Supabase creds (read-only, head count)
+router.get("/__selftest", async (_req, res) => {
+  try {
+    const url =
+      process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
+    const { name: keySource, value: key } = resolveServiceRoleKey();
+
+    const sb = getSupabase();
+    if (!sb) {
+      return res.status(200).json({
+        ok: false,
+        reason: "no_admin_client",
+        urlPresent: !!url,
+        keyPresent: !!key,
+        keySource,
+        urlHost: (() => {
+          try {
+            return new URL(url).host;
+          } catch {
+            return url;
+          }
+        })(),
+        keyLen: key ? key.length : 0,
+        keyMask: maskKey(key),
+      });
+    }
+
+    // Head count rápido: primero "profiles", si falla prueba "user_profiles"
+    let headErr = null;
+    let count = null;
+
+    let resp = await sb
+      .from("profiles")
+      .select("*", { head: true, count: "estimated" });
+    headErr = resp.error || null;
+    count = typeof resp.count === "number" ? resp.count : null;
+
+    if (headErr) {
+      const resp2 = await sb
+        .from("user_profiles")
+        .select("*", { head: true, count: "estimated" });
+      if (!resp2.error) {
+        headErr = null;
+        count = typeof resp2.count === "number" ? resp2.count : null;
+      }
+    }
+
+    const diag = {
+      ok: !headErr,
+      keySource: keySource || null,
+      urlHost: (() => {
+        try {
+          return new URL(url).host;
+        } catch {
+          return url;
+        }
+      })(),
+      keyLen: key ? key.length : 0,
+      keyMask: maskKey(key),
+      count: typeof count === "number" ? count : null,
+      error: headErr ? headErr.message : null,
+      code: headErr ? headErr.code : null,
+    };
+    return res.status(200).json(diag);
+  } catch (e) {
+    return res
+      .status(200)
+      .json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+// Optional write probe into mp_notifications (safe payload) to catch "Invalid API key"
+router.post("/__writeprobe", async (_req, res) => {
+  try {
+    const sb = getSupabase();
+    if (!sb)
+      return res.status(200).json({ ok: false, reason: "no_admin_client" });
+
+    const payload = {
+      topic: "probe",
+      payload: { ts: new Date().toISOString(), from: "webhook_mp.__writeprobe" },
+    };
+    const { error } = await sb.from("mp_notifications").insert([payload]);
+    if (error)
+      return res
+        .status(200)
+        .json({ ok: false, error: error.message, code: error.code });
+    return res.status(200).json({ ok: true });
+  } catch (e) {
+    return res
+      .status(200)
+      .json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+/* ──────────────────────── Ping simple ───────────────────────── */
 router.get("/", async (req, res) => {
   if (req.query?.test) {
     const { data } = req.body || {};
@@ -244,9 +687,20 @@ router.get("/", async (req, res) => {
       const plan = (data.metadata.plan || "premium").toLowerCase();
       const external_reference =
         data.external_reference || data.metadata?.external_reference || null;
+      const parsed = parseExternalRefString(external_reference || "");
+      const durationDays = effectiveDurationDays(
+        plan,
+        parsed,
+        data?.metadata || req.body?.metadata || {}
+      );
 
       if (status === "approved") {
-        const out = await handleApproved({ email, plan, external_reference });
+        const out = await handleApproved({
+          email,
+          plan,
+          external_reference,
+          durationDays,
+        });
         return res
           .status(200)
           .json({ ok: true, via: "test_inline_metadata", ...out });
@@ -261,10 +715,11 @@ router.get("/", async (req, res) => {
   return res.status(200).json({ ok: true, route: "/webhook_mp" });
 });
 
-/* ── Webhook principal de Mercado Pago ───────────────────────── */
+/* ─────────────── Webhook principal de Mercado Pago ───────────── */
 router.post("/", async (req, res) => {
   try {
     const { type, action, data } = req.body || {};
+    await persistNotificationRaw(req.body).catch(() => {});
 
     // --- Simulación local de APROBADO (sin pegarle a MP) ---
     if (
@@ -281,9 +736,36 @@ router.post("/", async (req, res) => {
         req.body?.metadata?.plan ||
         "premium"
       ).toLowerCase();
+      const parsed = parseExternalRefString(external_reference || "");
+      const durationDays = effectiveDurationDays(
+        plan,
+        parsed,
+        req.body?.metadata || {}
+      );
 
       if (email) {
-        const out = await handleApproved({ email, plan, external_reference });
+        // idempotencia sólo cuando aprobado (simulación ya significa aprobado)
+        try {
+          const recSim = await recordPaymentApproved({
+            payment_id: req.body?.data?.id || req.body?.id || `sim-${Date.now()}`,
+            email,
+            plan,
+            external_reference,
+            payload: req.body,
+          });
+          if (recSim?.duplicate) {
+            return res.status(200).json({ ok: true, via: "sim_approved", duplicate: true });
+          }
+        } catch (e) {
+          console.error("❌ recordPaymentApproved exception (sim_approved):", e?.message || e);
+        }
+
+        const out = await handleApproved({
+          email,
+          plan,
+          external_reference,
+          durationDays,
+        });
         return res.status(200).json({ ok: true, via: "sim_approved", ...out });
       }
       // No email provisto: aun así confirmamos recepción para pruebas de integración
@@ -318,12 +800,38 @@ router.post("/", async (req, res) => {
       const plan = (data.metadata.plan || "premium").toLowerCase();
       const external_reference =
         data.external_reference || data.metadata?.external_reference || null;
+      const parsed = parseExternalRefString(external_reference || "");
+      const durationDays = effectiveDurationDays(
+        plan,
+        parsed,
+        data?.metadata || {}
+      );
 
       if (status === "approved") {
-        const out = await handleApproved({ email, plan, external_reference });
+        // idempotencia: registrar approved una sola vez en tabla pagos,
+        // pero aunque sea duplicado seguimos ejecutando handleApproved (upserts idempotentes).
+        let recInline = { ok: true, duplicate: false };
+        try {
+          recInline = await recordPaymentApproved({
+            payment_id: data?.id || `inline-${Date.now()}`,
+            email,
+            plan,
+            external_reference,
+            payload: data,
+          });
+        } catch (e) {
+          console.error("❌ recordPaymentApproved exception (inline_metadata):", e?.message || e);
+        }
+
+        const out = await handleApproved({
+          email,
+          plan,
+          external_reference,
+          durationDays,
+        });
         return res
           .status(200)
-          .json({ ok: true, via: "inline_metadata", ...out });
+          .json({ ok: true, via: "inline_metadata", duplicate: !!recInline?.duplicate, ...out });
       }
       return res.status(200).json({ ok: true, ignored_status: status });
     }
@@ -341,10 +849,8 @@ router.post("/", async (req, res) => {
         (req.query?.id ??
           data?.id ??
           (req.body?.resource
-            ? (String(req.body.resource).match(/merchant_orders\/(\d+)/) ||
-                [])[1]
-            : null)) ||
-        null;
+            ? (String(req.body.resource).match(/merchant_orders\/(\d+)/) || [null])[1]
+            : null)) || null;
       if (moId != null) moId = String(moId).trim();
 
       if (!moId) {
@@ -352,7 +858,7 @@ router.post("/", async (req, res) => {
       }
 
       try {
-        const moUrl = `https://api.mercadopago.com/merchant_orders/${moId}`;
+        const moUrl = mpApi(`/merchant_orders/${moId}`);
         const moResp = await fetch(moUrl, {
           headers: {
             Authorization: `Bearer ${process.env.MP_ACCESS_TOKEN}`,
@@ -385,7 +891,7 @@ router.post("/", async (req, res) => {
         }
 
         // Lookup del pago para reutilizar la misma lógica
-        const payUrl = `https://api.mercadopago.com/v1/payments/${paymentRef.id}`;
+        const payUrl = mpApi(`/v1/payments/${paymentRef.id}`);
         const payResp = await fetch(payUrl, {
           headers: {
             Authorization: `Bearer ${process.env.MP_ACCESS_TOKEN}`,
@@ -431,16 +937,46 @@ router.post("/", async (req, res) => {
         }
 
         if (status === "approved" && email) {
+          // Idempotencia: registramos en pagos una sola vez,
+          // pero aunque sea duplicado seguimos ejecutando handleApproved.
+          let recMO = { ok: true, duplicate: false };
+          try {
+            recMO = await recordPaymentApproved({
+              payment_id: String(payment?.id ?? paymentRef.id),
+              email,
+              plan,
+              external_reference,
+              payload: payment,
+            });
+          } catch (e) {
+            console.error("❌ recordPaymentApproved exception (merchant_order):", e?.message || e);
+          }
+
+          const durationDays = effectiveDurationDays(
+            plan,
+            parsed,
+            payment?.metadata || {}
+          );
           const out = await handleApproved({
             email,
             plan,
             external_reference,
+            durationDays,
           });
           return res
             .status(200)
-            .json({ ok: true, via: "merchant_order_lookup", ...out });
+            .json({ ok: true, via: "merchant_order_lookup", duplicate: !!recMO?.duplicate, ...out });
         }
 
+        if (process.env.DEBUG_WEBHOOK) {
+          console.log("ℹ️ merchant_order_lookup ignored", {
+            moId,
+            paymentId: paymentRef.id,
+            status,
+            haveEmail: !!email,
+            external_reference,
+          });
+        }
         return res.status(200).json({
           ok: true,
           via: "merchant_order_lookup",
@@ -485,7 +1021,7 @@ router.post("/", async (req, res) => {
       if (!mpPayment) {
         // Fallback a HTTP directo si el SDK no devolvió cuerpo
         try {
-          const payUrl = `https://api.mercadopago.com/v1/payments/${paymentId}`;
+          const payUrl = mpApi(`/v1/payments/${paymentId}`);
           const payResp = await fetch(payUrl, {
             headers: {
               Authorization: `Bearer ${process.env.MP_ACCESS_TOKEN}`,
@@ -511,18 +1047,25 @@ router.post("/", async (req, res) => {
       }
 
       const status = String(mpPayment.status || "").toLowerCase();
-      let email = null;
-      let plan = null;
+      const extractExternalReference = (body, payment) => {
+        return (
+          body?.external_reference ||
+          body?.data?.external_reference ||
+          payment?.external_reference ||
+          payment?.metadata?.external_reference ||
+          null
+        );
+      };
       const external_reference = extractExternalReference(req.body, mpPayment);
 
       // Prefer values parsed from external_reference, then fall back to MP metadata
       const parsed = parseExternalRefString(external_reference);
-      email =
+      const email =
         parsed.email ||
         mpPayment?.metadata?.email ||
         mpPayment?.payer?.email ||
         null;
-      plan = (
+      const plan = (
         parsed.plan ||
         mpPayment?.metadata?.plan ||
         "premium"
@@ -539,18 +1082,50 @@ router.post("/", async (req, res) => {
       }
 
       if (status === "approved" && email) {
-        const out = await handleApproved({ email, plan, external_reference });
+        // Idempotencia en tabla pagos, pero sin bloquear la resync de profiles/negocios.
+        let recPay = { ok: true, duplicate: false };
+        try {
+          recPay = await recordPaymentApproved({
+            payment_id: String(mpPayment?.id ?? paymentId),
+            email,
+            plan,
+            external_reference,
+            payload: mpPayment,
+          });
+        } catch (e) {
+          console.error("❌ recordPaymentApproved exception (payment_lookup):", e?.message || e);
+        }
+
+        const durationDays = effectiveDurationDays(
+          plan,
+          parsed,
+          mpPayment?.metadata || {}
+        );
+        const out = await handleApproved({
+          email,
+          plan,
+          external_reference,
+          durationDays,
+        });
         return res
           .status(200)
-          .json({ ok: true, via: "payment_lookup", ...out });
+          .json({ ok: true, via: "payment_lookup", duplicate: !!recPay?.duplicate, ...out });
       }
 
+      if (process.env.DEBUG_WEBHOOK) {
+        console.log("ℹ️ payment_lookup ignored", {
+          paymentId,
+          status,
+          haveEmail: !!email,
+          external_reference,
+        });
+      }
       return res
         .status(200)
         .json({ ok: true, ignored: { status, haveEmail: !!email } });
     }
 
-    // 3) Otras acciones de MP (merchant_orders, subscriptions, etc.)
+    // 4) Otras acciones de MP (merchant_orders, subscriptions, etc.)
     if (process.env.DEBUG_WEBHOOK) {
       return res.status(200).json({
         ok: true,
@@ -559,7 +1134,9 @@ router.post("/", async (req, res) => {
         ignored_action: { type, action },
       });
     }
-    return res.status(200).json({ ok: true, ignored_action: { type, action } });
+    return res
+      .status(200)
+      .json({ ok: true, ignored_action: { type, action } });
   } catch (err) {
     console.error("❌ webhook_mp error:", err);
     // 200 para no generar reintentos infinitos por errores propios
