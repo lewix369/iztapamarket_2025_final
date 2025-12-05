@@ -271,6 +271,11 @@ async function syncProfileAndBusiness(supabaseAdmin, payment) {
       null,
   };
 
+  // Auto-aprobar negocios cuando el plan es de pago (pro/premium)
+  if (wantsPaid) {
+    updatePayload.is_approved = true;
+  }
+
   // Respetar constraint: premium/pro requieren user_id, free requiere user_id NULL.
   if (wantsPaid && user_id) {
     updatePayload.plan_type = plan_type;

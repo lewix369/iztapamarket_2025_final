@@ -1834,24 +1834,32 @@ const planName = (profilePlan || business?.plan_type || "").toLowerCase();
       </h1>
       {/* ✨ Sello rápido del plan (no invasivo) */}
       {(() => {
-        const plan = (badgeNegocio?.plan_type || "free").toLowerCase();
+        if (badgeLoading) return null;
+
+        const plan = (planName || badgeNegocio?.plan_type || "free").toLowerCase();
         const isPro = plan === "pro";
         const isPremium = plan === "premium";
-        if (badgeLoading) return null;
-        return (
-          isPremium ? (
+
+        if (isPremium) {
+          return (
             <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-emerald-800">
               ✨ Estás en <b>Plan Premium</b>. Ya puedes usar todas las funciones.
             </div>
-          ) : isPro ? (
+          );
+        }
+
+        if (isPro) {
+          return (
             <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-3 text-blue-800">
               ⭐ Estás en <b>Plan Pro</b>. Algunas funciones avanzadas requieren Premium.
             </div>
-          ) : (
-            <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-800">
-              🆓 Estás en <b>Plan Free</b>. Para promociones y video, mejora a Premium.
-            </div>
-          )
+          );
+        }
+
+        return (
+          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-800">
+            🆓 Estás en <b>Plan Free</b>. Para promociones y video, mejora a Premium.
+          </div>
         );
       })()}
 
