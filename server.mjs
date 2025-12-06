@@ -46,14 +46,26 @@ console.log(
   process.env.MP_ACCESS_TOKEN ? "SET" : "MISSING"
 );
 
-// Helper: absolutizar URLs relativas
+// Helper: absolutizar URLs relativas (más robusto)
 const makeAbsolute = (u, base) => {
   if (!u) return u;
-  try {
-    return new URL(u, base).toString();
-  } catch {
-    return u;
+  const s = String(u).trim();
+
+  // Ya es URL absoluta con http/https
+  if (s.startsWith("http://") || s.startsWith("https://")) {
+    return s;
   }
+
+  // Si viene algo como "localhost:3001/xxx" o "/pago/success",
+  // lo pegamos sobre la base asegurando esquema + host.
+  const safeBase = (base || "http://localhost:3001").replace(/\/+$/, "");
+
+  if (s.startsWith("/")) {
+    return `${safeBase}${s}`;
+  }
+
+  // Caso "localhost:3001/xxx" sin slash inicial
+  return `${safeBase}/${s}`;
 };
 
 // 4) Healthcheck y versiones
@@ -328,6 +340,7 @@ app.post("/api/create-preference", createPreferenceHandler);
 app.post("/api/mp/create-preference", createPreferenceHandler);
 app.post("/api/mercadopago/create-preference", createPreferenceHandler);
 app.post("/mp/create", createPreferenceHandler); // alias corto legacy
+app.post("/api/create_preference_v2", createPreferenceHandler);
 
 // Proxies de verificación para el frontend (PaySuccess)
 app.get(["/mp/payment/:id", "/api/mp/payment/:id"], async (req, res) => {

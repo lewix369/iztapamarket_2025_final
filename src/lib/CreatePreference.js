@@ -97,25 +97,11 @@ export const createPreference = async (plan, email) => {
       data = await resp.text();
     }
 
-    // Detecta entorno para elegir init_point vs sandbox_init_point
-    const mpEnv =
-      (typeof import.meta !== "undefined" && import.meta?.env?.VITE_MP_ENV) ||
-      (typeof process !== "undefined" && process?.env?.VITE_MP_ENV) ||
-      (typeof process !== "undefined" && process?.env?.MP_ENV) ||
-      "";
-
-    const preferSandbox =
-      String(mpEnv).toLowerCase() === "sandbox" ||
-      (onBrowser && origin && origin.includes("localhost"));
-
+    // Siempre preferimos init_point; sandbox_init_point solo como respaldo
     let url;
     if (typeof data === "string") {
       url = data;
-    } else if (preferSandbox) {
-      // En sandbox/local preferimos sandbox_init_point para poder usar tarjetas/usuarios de prueba
-      url = data?.sandbox_init_point || data?.init_point || "";
     } else {
-      // En producción preferimos init_point
       url = data?.init_point || data?.sandbox_init_point || "";
     }
 

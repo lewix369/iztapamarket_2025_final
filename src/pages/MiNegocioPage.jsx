@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Upload } from "lucide-react";
 import { mapPromo } from "@/utils/mapPromo";
 import { getSessionAndProfile } from "@/lib/useUserProfile";
+import BusinessForm from "@/components/admin/BusinessForm";
 
 /* =========================
    Utilidad: YouTube a /embed/
@@ -90,6 +91,7 @@ const MiNegocioPage = () => {
   const [badgeNegocio, setBadgeNegocio] = useState(null);
   const [currentUserId, setCurrentUserId] = useState(null);
   const [canEditBusiness, setCanEditBusiness] = useState(false);
+  const [showMinimalForm, setShowMinimalForm] = useState(false);
 
   async function loadBusinessBadge() {
     setBadgeLoading(true);
@@ -279,7 +281,13 @@ const MiNegocioPage = () => {
   };
 
   // ---- unified plan source ----
-const planName = (profilePlan || business?.plan_type || "").toLowerCase();
+  const rawUrlPlan = (params.get("plan") || "").toLowerCase();
+  const planName = (
+    profilePlan ||
+    business?.plan_type ||
+    rawUrlPlan ||
+    "free"
+  ).toLowerCase();
   const isPremiumPlan = planName === "premium";
 
   // debug interno (no uses window._planName)
@@ -676,31 +684,6 @@ const planName = (profilePlan || business?.plan_type || "").toLowerCase();
         }
         let negocio = data || null;
 
-        // 5) Si NO existe negocio y venimos de pago PRO/PREMIUM -> crear ligado al user_id
-        if (
-          !negocio &&
-          userId &&
-          (planFromUrl === "pro" || planFromUrl === "premium")
-        ) {
-          const basePayload = {
-            user_id: userId,
-            email: userEmail || emailFromUrl,
-            nombre: "",
-            direccion: "",
-            telefono: "",
-            plan_type: planFromUrl,
-          };
-
-          const { data: inserted, error: insertErr } = await supabase
-            .from('negocios')
-            .insert(basePayload)
-            .select()
-            .single();
-
-          if (!insertErr) {
-            negocio = inserted;
-          }
-        }
 
         // 6) Aplicar plan si venía en la URL (y difiere)
         if (negocio && (planFromUrl === "pro" || planFromUrl === "premium")) {
@@ -1827,6 +1810,59 @@ const planName = (profilePlan || business?.plan_type || "").toLowerCase();
   };
 
  
+  // Si el usuario tiene plan Pro/Premium pero aún no tiene negocio creado,
+  // mostramos un CTA claro para ir al formulario de registro
+  if (
+    authChecked &&
+    hasSession &&
+    !business.id &&
+    (planName === "pro" || planName === "premium") &&
+    !showMinimalForm
+  ) {
+    const planSafe = planName || "pro";
+    return (
+      <div className="p-6 max-w-3xl mx-auto bg-white shadow-lg rounded-lg border border-gray-200">
+        <h1 className="text-2xl font-bold mb-4 text-gray-800">Mi negocio</h1>
+        <div className="mb-4 rounded-lg border border-green-200 bg-green-50 p-3 text-green-800">
+          <p className="font-semibold">
+            Tu plan <span className="uppercase">{planSafe}</span> ya está activo. ✅
+          </p>
+          <p>
+            Solo falta que registres los datos de tu negocio para aparecer en IztapaMarket.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setShowMinimalForm(true)}
+          className="inline-flex items-center px-4 py-2 rounded-lg bg-orange-500 text-white font-semibold hover:bg-orange-600"
+        >
+          Crear mi negocio ahora
+        </button>
+        <p className="mt-3 text-xs text-gray-500">
+          Si ya tenías un negocio y no aparece, escríbenos a WhatsApp para ayudarte.
+        </p>
+      </div>
+    );
+  }
+
+  // Construir URL de login preservando plan/paid/email
+  const emailParam = params.get("email") || "";
+  const planParam = params.get("plan") || "";
+  const paidParam = params.get("paid") || "";
+
+  const redirectSearch = new URLSearchParams();
+  if (planParam) redirectSearch.set("plan", planParam);
+  if (paidParam) redirectSearch.set("paid", paidParam);
+  if (emailParam) redirectSearch.set("email", emailParam);
+
+  const redirectTarget = redirectSearch.toString()
+    ? `/mi-negocio?${redirectSearch.toString()}`
+    : "/mi-negocio";
+
+  const loginUrl = `/login?redirect=${encodeURIComponent(
+    redirectTarget
+  )}&email=${encodeURIComponent(emailParam)}`;
+ 
   return (
     <div className="p-6 max-w-3xl mx-auto bg-white shadow-lg rounded-lg border border-gray-200">
       <h1 className="text-2xl font-bold mb-4 text-gray-800">
@@ -1871,9 +1907,7 @@ const planName = (profilePlan || business?.plan_type || "").toLowerCase();
             sesión con el correo <strong>{params.get("email")}</strong>.
           </p>
           <a
-            href={`/login?redirect=/mi-negocio&email=${encodeURIComponent(
-              params.get("email") || ""
-            )}`}
+            href={loginUrl}
             className="inline-flex items-center gap-2 px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700"
           >
             Iniciar sesión
@@ -1960,6 +1994,13 @@ const planName = (profilePlan || business?.plan_type || "").toLowerCase();
             Información general
           </h2>
           <div className="h-px bg-gray-200 my-3" />
+
+          {showMinimalForm && (
+            <BusinessForm
+              plan="premium"
+              mode="minimal"
+            />
+          )}
 
           <label>Nombre</label>
           <Input

@@ -88,7 +88,11 @@ const LoginPage = () => {
 
       const { error } = await supabase.auth.signInWithOtp({
         email,
-        options: { emailRedirectTo: callback, shouldCreateUser: true },
+        options: {
+          emailRedirectTo: callback,
+          redirectTo: callback,
+          shouldCreateUser: true,
+        },
       });
       if (error) throw error;
       setSent(true);

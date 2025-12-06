@@ -169,11 +169,14 @@ export default function PaySuccess() {
   useEffect(() => {
     if (isFree) return;
 
-    const urlApproved = url_status === "approved" || url_status === "success";
+    const urlApproved =
+      url_status === "approved" || url_status === "success";
     const hasAnyRef = Boolean(
       payment_id || merchant_order_id || preference_id || external_reference
     );
-    if (!urlApproved || !hasAnyRef) return;
+
+    // Si la URL no marca approved/success, no hacemos nada
+    if (!urlApproved) return;
 
     // Recupera y normaliza plan/email desde URL o localStorage (fallback)
     const rawPlan =
@@ -190,7 +193,29 @@ export default function PaySuccess() {
       .trim()
       .toLowerCase();
 
-    // Toma todos los parámetros actuales y fuerza los que necesitamos
+    // 🔁 Fallback ligero: si no hay IDs de pago (payment_id / merchant_order_id / preference_id / external_reference),
+    // igual mandamos al registro con el plan/email que tengamos. Esto permite probar
+    // /pago/success?status=approved&plan=pro aunque no haya referencias de MP.
+    if (!hasAnyRef) {
+      const qNoRef = new URLSearchParams();
+      qNoRef.set("plan", planF);
+      if (emailF) qNoRef.set("email", emailF);
+      qNoRef.set("paid", "approved");
+
+      try {
+        if (window.__ps_redirected) return;
+        window.__ps_redirected = true;
+        if (window.__ps_timer) {
+          clearTimeout(window.__ps_timer);
+          window.__ps_timer = null;
+        }
+      } catch {}
+
+      safeNavigate(`/registro?${qNoRef.toString()}`);
+      return;
+    }
+
+    // Toma todos los parámetros actuales y fuerza los que necesitamos cuando sí hay referencias de pago
     const q = new URLSearchParams(window.location.search);
     q.set("plan", planF);
     if (emailF) q.set("email", emailF);

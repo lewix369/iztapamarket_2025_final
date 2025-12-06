@@ -552,16 +552,14 @@ const RegisterBusinessPage = () => {
 
       const data = await resp.json().catch(() => ({}));
 
-      // Elegir URL de checkout respetando SANDBOX cuando esté forzado por env
-      const FORCE_SANDBOX = (() => {
-        const v = (import.meta.env.VITE_FORCE_SANDBOX ?? "0").toString().trim().toLowerCase();
-        return v === "1" || v === "true" || v === "yes";
-      })();
-      // En sandbox preferimos sandbox_init_point; en prod usamos init_point
-      const checkoutUrl = (FORCE_SANDBOX ? (data?.sandbox_init_point || data?.init_point) : data?.init_point)
-        || data?.checkout_url
-        || data?.sandbox_checkout_url;
-      console.debug("[MP] FORCE_SANDBOX=", FORCE_SANDBOX, "checkoutUrl=", checkoutUrl);
+      // Elegir SIEMPRE el init_point normal (flujo prod-like MX)
+      const checkoutUrl =
+        data?.init_point ||
+        data?.checkout_url ||
+        data?.sandbox_init_point ||
+        data?.sandbox_checkout_url;
+
+      console.debug("[MP] checkoutUrl (init_point-first) =", checkoutUrl);
 
       if (!resp.ok || !checkoutUrl) {
         const msg =
