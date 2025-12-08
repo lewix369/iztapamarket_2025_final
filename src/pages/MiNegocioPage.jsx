@@ -281,13 +281,21 @@ const MiNegocioPage = () => {
   };
 
   // ---- unified plan source ----
+  // Prioridad: negocio (incluye cambios tras pago) > badgeNegocio > perfil > URL > free
   const rawUrlPlan = (params.get("plan") || "").toLowerCase();
-  const planName = (
-    profilePlan ||
+  const negocioPlan = (
     business?.plan_type ||
-    rawUrlPlan ||
-    "free"
+    badgeNegocio?.plan_type ||
+    ""
   ).toLowerCase();
+  const profilePlanSafe = (profilePlan || "").toLowerCase();
+
+  const planName =
+    negocioPlan ||
+    profilePlanSafe ||
+    rawUrlPlan ||
+    "free";
+
   const isPremiumPlan = planName === "premium";
 
   // debug interno (no uses window._planName)
@@ -672,17 +680,61 @@ const MiNegocioPage = () => {
         }
 
         // 4) Con sesión: buscar el negocio por user_id de forma segura
-        const { data, error } = await supabase
-          .from('negocios')
-          .select('*')
-          .eq('user_id', userId)
-          .maybeSingle();
-        if (error) {
-          console.error('[MiNegocio] Error cargando negocio', error);
-          setAuthChecked(true);
-          return;
+        let negocio = null;
+
+        if (userId) {
+          const { data, error } = await supabase
+            .from("negocios")
+            .select("*")
+            .eq("user_id", userId)
+            .maybeSingle();
+
+          if (error) {
+            console.error("[MiNegocio] Error cargando negocio por user_id", error);
+          } else {
+            negocio = data || null;
+          }
         }
-        let negocio = data || null;
+
+        // 5) Si no se encontró por user_id, intentar por email (URL > sesión)
+        if (!negocio) {
+          const emailLookup = (emailFromUrl || userEmail || "").toLowerCase().trim();
+
+          if (emailLookup) {
+            const { data: byEmail, error: emailErr } = await supabase
+              .from("negocios")
+              .select("*")
+              .eq("email", emailLookup)
+              .maybeSingle();
+
+            if (emailErr) {
+              console.error("[MiNegocio] Error cargando negocio por email", emailErr);
+            } else if (byEmail) {
+              negocio = byEmail;
+
+              // Si el negocio es PRO/PREMIUM y aún no tiene user_id, lo ligamos
+              const planLowerEmail = (byEmail.plan_type || "").toLowerCase();
+              const isPaidPlanEmail =
+                planLowerEmail === "pro" || planLowerEmail === "premium";
+
+              if (isPaidPlanEmail && userId && !byEmail.user_id) {
+                try {
+                  await supabase
+                    .from("negocios")
+                    .update({ user_id: userId })
+                    .eq("id", byEmail.id);
+
+                  negocio.user_id = userId;
+                } catch (linkErr) {
+                  console.error(
+                    "[MiNegocio] Error ligando negocio a user_id por email",
+                    linkErr
+                  );
+                }
+              }
+            }
+          }
+        }
 
 
         // 6) Aplicar plan si venía en la URL (y difiere)
@@ -1810,22 +1862,21 @@ const MiNegocioPage = () => {
   };
 
  
-  // Si el usuario tiene plan Pro/Premium pero aún no tiene negocio creado,
-  // mostramos un CTA claro para ir al formulario de registro
+  // Si el usuario tiene sesión pero aún no tiene negocio creado,
+  // mostramos un CTA claro para ir al formulario de registro (cualquier plan)
   if (
     authChecked &&
     hasSession &&
     !business.id &&
-    (planName === "pro" || planName === "premium") &&
     !showMinimalForm
   ) {
-    const planSafe = planName || "pro";
+    const planSafe = (planName || "free").toUpperCase();
     return (
       <div className="p-6 max-w-3xl mx-auto bg-white shadow-lg rounded-lg border border-gray-200">
         <h1 className="text-2xl font-bold mb-4 text-gray-800">Mi negocio</h1>
         <div className="mb-4 rounded-lg border border-green-200 bg-green-50 p-3 text-green-800">
           <p className="font-semibold">
-            Tu plan <span className="uppercase">{planSafe}</span> ya está activo. ✅
+            Tu plan <span className="uppercase">{planSafe}</span> ya está listo. ✅
           </p>
           <p>
             Solo falta que registres los datos de tu negocio para aparecer en IztapaMarket.
@@ -1936,8 +1987,8 @@ const MiNegocioPage = () => {
         </div>
       )}
 
-      {/* Guard rails de edición: explica por qué no puede editar */}
-      {authChecked && !canEditBusiness && (() => {
+      {/* Guard rails de edición: explica por qué no puede editar (solo si ya hay negocio) */}
+      {authChecked && business.id && !canEditBusiness && (() => {
         const ownerId = business?.user_id || business?.owner_user_id || null;
         const hasOwner = !!ownerId;
         const isFree = planName === "free";
@@ -1995,187 +2046,189 @@ const MiNegocioPage = () => {
           </h2>
           <div className="h-px bg-gray-200 my-3" />
 
-          {showMinimalForm && (
+          {showMinimalForm ? (
             <BusinessForm
-              plan="premium"
+              plan={planName || "free"}
               mode="minimal"
             />
-          )}
-
-          <label>Nombre</label>
-          <Input
-            type="text"
-            name="nombre"
-            value={business.nombre || ""}
-            onChange={(e) =>
-              setBusiness({ ...business, nombre: e.target.value })
-            }
-          />
-
-          <label>Dirección</label>
-          <Input
-            type="text"
-            name="direccion"
-            value={business.direccion || ""}
-            onChange={(e) =>
-              setBusiness({ ...business, direccion: e.target.value })
-            }
-          />
-
-          <label>Teléfono</label>
-          <Input
-            type="text"
-            name="telefono"
-            value={business.telefono || ""}
-            onChange={(e) =>
-              setBusiness({ ...business, telefono: e.target.value })
-            }
-          />
-          {/* WhatsApp (opcional) */}
-          <label className="mt-2 block">WhatsApp (opcional)</label>
-          <Input
-            type="tel"
-            name="whatsapp"
-            placeholder="+52 55 1234 5678"
-            value={business.whatsapp || ""}
-            onChange={(e) =>
-              setBusiness({ ...business, whatsapp: e.target.value })
-            }
-            onBlur={(e) => {
-              const v = normalizeWhats(e.target.value);
-              if (v && v !== business.whatsapp)
-                setBusiness((prev) => ({ ...prev, whatsapp: v }));
-            }}
-          />
-          <div className="text-xs text-gray-500 mt-1 flex items-center gap-2">
-            <span>
-              Ingresa tu número con lada internacional. Si dejas vacío, solo se
-              mostrará el botón de llamada.
-            </span>
-            {isValidWhats(business.whatsapp) && (
-              <a
-                href={toWaLink(business.whatsapp)}
-                target="_blank"
-                rel="noreferrer"
-                className="underline text-green-700"
-                title="Probar enlace de WhatsApp"
-              >
-                Probar WhatsApp
-              </a>
-            )}
-          </div>
-
-          {/* Mapa / Ubicación (solo Pro y Premium) */}
-          {(planName === "pro" || planName === "premium") && (
+          ) : (
             <>
-              <h2 className="text-xl font-semibold text-gray-900 mt-6">
-                Mapa y ubicación
-              </h2>
-              <div className="h-px bg-gray-200 my-3" />
+              <label>Nombre</label>
+              <Input
+                type="text"
+                name="nombre"
+                value={business.nombre || ""}
+                onChange={(e) =>
+                  setBusiness({ ...business, nombre: e.target.value })
+                }
+              />
 
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  type="button"
-                  onClick={handleSetCurrentLocation}
-                  className="bg-green-600 text-white hover:bg-green-700"
-                >
-                  Usar mi ubicación actual
-                </Button>
-                {(() => {
-                  const links = buildExternalMapLinks();
-                  return (
-                    <>
-                      {links.google && (
-                        <a
-                          href={links.google}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center px-3 py-2 rounded border text-blue-700 border-blue-300 hover:bg-blue-50"
-                          title="Abrir indicaciones en Google Maps"
-                        >
-                          Google Maps
-                        </a>
-                      )}
-                      {links.waze && (
-                        <a
-                          href={links.waze}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center px-3 py-2 rounded border text-purple-700 border-purple-300 hover:bg-purple-50"
-                          title="Abrir en Waze"
-                        >
-                          Waze
-                        </a>
-                      )}
-                      {links.uber && (
-                        <a
-                          href={links.uber}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center px-3 py-2 rounded border text-black border-gray-300 hover:bg-gray-50"
-                          title="Pedir Uber"
-                        >
-                          Uber
-                        </a>
-                      )}
-                      {links.didi && (
-                        <a
-                          href={links.didi}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center px-3 py-2 rounded border text-orange-700 border-orange-300 hover:bg-orange-50"
-                          title="Abrir DiDi (beta)"
-                        >
-                          DiDi
-                        </a>
-                      )}
-                      {(links.google ||
-                        links.waze ||
-                        links.uber ||
-                        links.didi) && (
-                        <Button
-                          type="button"
-                          onClick={copyAddressToClipboard}
-                          variant="outline"
-                          className="text-gray-700"
-                          title="Copiar dirección o coordenadas"
-                        >
-                          Copiar dirección
-                        </Button>
-                      )}
-                    </>
-                  );
-                })()}
-                {business.mapa_embed_url && (
-                  <Button
-                    type="button"
-                    onClick={handleClearMap}
-                    variant="destructive"
-                    className="text-white"
-                    title="Quitar mapa embebido"
+              <label>Dirección</label>
+              <Input
+                type="text"
+                name="direccion"
+                value={business.direccion || ""}
+                onChange={(e) =>
+                  setBusiness({ ...business, direccion: e.target.value })
+                }
+              />
+
+              <label>Teléfono</label>
+              <Input
+                type="text"
+                name="telefono"
+                value={business.telefono || ""}
+                onChange={(e) =>
+                  setBusiness({ ...business, telefono: e.target.value })
+                }
+              />
+              {/* WhatsApp (opcional) */}
+              <label className="mt-2 block">WhatsApp (opcional)</label>
+              <Input
+                type="tel"
+                name="whatsapp"
+                placeholder="+52 55 1234 5678"
+                value={business.whatsapp || ""}
+                onChange={(e) =>
+                  setBusiness({ ...business, whatsapp: e.target.value })
+                }
+                onBlur={(e) => {
+                  const v = normalizeWhats(e.target.value);
+                  if (v && v !== business.whatsapp)
+                    setBusiness((prev) => ({ ...prev, whatsapp: v }));
+                }}
+              />
+              <div className="text-xs text-gray-500 mt-1 flex items-center gap-2">
+                <span>
+                  Ingresa tu número con lada internacional. Si dejas vacío, solo se
+                  mostrará el botón de llamada.
+                </span>
+                {isValidWhats(business.whatsapp) && (
+                  <a
+                    href={toWaLink(business.whatsapp)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="underline text-green-700"
+                    title="Probar enlace de WhatsApp"
                   >
-                    Quitar mapa
-                  </Button>
+                    Probar WhatsApp
+                  </a>
                 )}
               </div>
 
-              {/* Preview del mapa si existe */}
-              {business.mapa_embed_url ? (
-                <div className="mt-3 rounded-lg overflow-hidden border">
-                  <iframe
-                    src={(business.mapa_embed_url || "").replace(/&amp;/g, "&")}
-                    title="Mapa del negocio"
-                    className="w-full"
-                    style={{ height: 320 }}
-                    loading="lazy"
-                    referrerPolicy="no-referrer-when-downgrade"
-                  />
-                </div>
-              ) : (
-                <p className="mt-2 text-xs text-gray-500">
-                  Aún no hay mapa embebido. Pulsa "Usar mi ubicación actual" o
-                  guarda tu dirección y usa "Abrir en Google Maps".
-                </p>
+              {/* Mapa / Ubicación (solo Pro y Premium) */}
+              {(planName === "pro" || planName === "premium") && (
+                <>
+                  <h2 className="text-xl font-semibold text-gray-900 mt-6">
+                    Mapa y ubicación
+                  </h2>
+                  <div className="h-px bg-gray-200 my-3" />
+
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      onClick={handleSetCurrentLocation}
+                      className="bg-green-600 text-white hover:bg-green-700"
+                    >
+                      Usar mi ubicación actual
+                    </Button>
+                    {(() => {
+                      const links = buildExternalMapLinks();
+                      return (
+                        <>
+                          {links.google && (
+                            <a
+                              href={links.google}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center px-3 py-2 rounded border text-blue-700 border-blue-300 hover:bg-blue-50"
+                              title="Abrir indicaciones en Google Maps"
+                            >
+                              Google Maps
+                            </a>
+                          )}
+                          {links.waze && (
+                            <a
+                              href={links.waze}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center px-3 py-2 rounded border text-purple-700 border-purple-300 hover:bg-purple-50"
+                              title="Abrir en Waze"
+                            >
+                              Waze
+                            </a>
+                          )}
+                          {links.uber && (
+                            <a
+                              href={links.uber}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center px-3 py-2 rounded border text-black border-gray-300 hover:bg-gray-50"
+                              title="Pedir Uber"
+                            >
+                              Uber
+                            </a>
+                          )}
+                          {links.didi && (
+                            <a
+                              href={links.didi}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center px-3 py-2 rounded border text-orange-700 border-orange-300 hover:bg-orange-50"
+                              title="Abrir DiDi (beta)"
+                            >
+                              DiDi
+                            </a>
+                          )}
+                          {(links.google ||
+                            links.waze ||
+                            links.uber ||
+                            links.didi) && (
+                            <Button
+                              type="button"
+                              onClick={copyAddressToClipboard}
+                              variant="outline"
+                              className="text-gray-700"
+                              title="Copiar dirección o coordenadas"
+                            >
+                              Copiar dirección
+                            </Button>
+                          )}
+                        </>
+                      );
+                    })()}
+                    {business.mapa_embed_url && (
+                      <Button
+                        type="button"
+                        onClick={handleClearMap}
+                        variant="destructive"
+                        className="text-white"
+                        title="Quitar mapa embebido"
+                      >
+                        Quitar mapa
+                      </Button>
+                    )}
+                  </div>
+
+                  {/* Preview del mapa si existe */}
+                  {business.mapa_embed_url ? (
+                    <div className="mt-3 rounded-lg overflow-hidden border">
+                      <iframe
+                        src={(business.mapa_embed_url || "").replace(/&amp;/g, "&")}
+                        title="Mapa del negocio"
+                        className="w-full"
+                        style={{ height: 320 }}
+                        loading="lazy"
+                        referrerPolicy="no-referrer-when-downgrade"
+                      />
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-xs text-gray-500">
+                      Aún no hay mapa embebido. Pulsa "Usar mi ubicación actual" o
+                      guarda tu dirección y usa "Abrir en Google Maps".
+                    </p>
+                  )}
+                </>
               )}
             </>
           )}

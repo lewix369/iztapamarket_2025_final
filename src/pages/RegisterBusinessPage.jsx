@@ -304,8 +304,8 @@ const RegisterBusinessPage = () => {
     !authUser;
 
   const goLoginToFinish = () => {
-    const shouldGoToBusiness = (selectedPlan === "pro" || selectedPlan === "premium") && isPaid;
-    const dest = shouldGoToBusiness ? "/mi-negocio" : `${location.pathname}${location.search || ""}`;
+    // Siempre regresamos a la misma URL (incluyendo ?plan=...&paid=...)
+    const dest = `${location.pathname}${location.search || ""}`;
     const e = (formData.email || localEmail || "").trim();
     const safeEmail = e && e !== "null" && e !== "undefined" ? e : "";
     navigate(
@@ -314,13 +314,6 @@ const RegisterBusinessPage = () => {
       }`
     );
   };
-  // ⛳️ Auto-redirect suave si venimos de pago aprobado sin sesión
-  useEffect(() => {
-    if (mustLoginToFinish) {
-      const t = setTimeout(() => goLoginToFinish(), 0);
-      return () => clearTimeout(t);
-    }
-  }, [mustLoginToFinish]);
 
   // 🔎 Si ya hay sesión + pago aprobado, verifica si ya existe negocio y redirige al panel
   useEffect(() => {
@@ -1029,17 +1022,144 @@ const RegisterBusinessPage = () => {
         </div>
       )}
 
-      {!mustLoginToFinish && (
-        (((selectedPlan === "pro" || selectedPlan === "premium") && isPaid) ||
-          selectedPlan === "free") && (
-          <form
-            onSubmit={handleSubmit}
-            className="max-w-2xl mx-auto space-y-6 bg-white p-6 shadow rounded-lg"
-          >
-            {/* FREE */}
-            {selectedPlan === "free" && (
-              <>
+      {(((selectedPlan === "pro" || selectedPlan === "premium") && isPaid) ||
+        selectedPlan === "free") && (
+        <form
+          onSubmit={handleSubmit}
+          className="max-w-2xl mx-auto space-y-6 bg-white p-6 shadow rounded-lg"
+        >
+          {/* FREE */}
+          {selectedPlan === "free" && (
+            <>
+              <label className="font-semibold text-sm mb-1 block">
+                Nombre del negocio
+              </label>
+              <Input
+                name="nombre"
+                value={formData.nombre}
+                onChange={handleChange}
+                required
+                placeholder="Ejemplo: Taquería El Buen Sabor"
+              />
+              <label className="font-semibold text-sm mb-1 block">
+                Categoría
+              </label>
+              <Select
+                name="categoria"
+                value={formData.categoria}
+                onValueChange={handleCategoryChange}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecciona una categoría" />
+                </SelectTrigger>
+                <SelectContent>
+                  {categories.map((cat) => (
+                    <SelectItem key={cat} value={cat}>
+                      {cat}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <label className="font-semibold text-sm mb-1 block">
+                Teléfono
+              </label>
+              <Input
+                name="telefono"
+                value={formData.telefono}
+                onChange={handleChange}
+                required
+                placeholder="Ejemplo: 555-123-4567"
+              />
+              <label className="font-semibold text-sm mb-1 block">
+                Dirección
+              </label>
+              <Textarea
+                name="direccion"
+                value={formData.direccion}
+                onChange={handleChange}
+                required
+                placeholder="Ejemplo: Av. Juárez 123, Iztapalapa"
+              />
+              <label className="font-semibold text-sm mb-1 block">
+                Descripción del negocio
+              </label>
+              <Textarea
+                name="descripcion"
+                value={formData.descripcion}
+                onChange={handleChange}
+                placeholder="Describe tu negocio brevemente"
+              />
+              <div>
                 <label className="font-semibold text-sm mb-1 block">
+                  Imagen del negocio
+                </label>
+                {previewUrl && (
+                  <div className="mt-4">
+                    <p className="text-sm text-gray-500 mb-1">Vista previa:</p>
+                    <img
+                      src={previewUrl}
+                      alt="Vista previa"
+                      className="w-40 h-auto rounded-md border"
+                    />
+                  </div>
+                )}
+                <input
+                  type="file"
+                  name="imagen"
+                  accept="image/*"
+                  onChange={async (e) => {
+                    const file = e.target.files[0];
+                    if (!file) return;
+                    setImagenNegocio(file);
+                    const localUrl = URL.createObjectURL(file);
+                    setPreviewUrl(localUrl);
+
+                    try {
+                      const fileExt = file.name.split(".").pop();
+                      const fileName = `${Date.now()}.${fileExt}`;
+                      const filePath = `negocios/${fileName}`;
+
+                      const { error } = await supabase.storage
+                        .from("negocios")
+                        .upload(filePath, file, {
+                          cacheControl: "3600",
+                          upsert: false,
+                        });
+
+                      if (error) {
+                        toastify.error("❌ No se pudo subir la imagen.");
+                        return;
+                      }
+
+                      const { data: urlData } = supabase.storage
+                        .from("negocios")
+                        .getPublicUrl(filePath);
+
+                      setFormData((prev) => ({
+                        ...prev,
+                        imagen_url: urlData?.publicUrl || "",
+                      }));
+                    } catch (err) {
+                      console.error("Error al subir imagen:", err);
+                      toastify.error("❌ No se pudo subir la imagen.");
+                    }
+                  }}
+                  className="block w-full text-sm text-gray-700
+                           file:mr-4 file:py-2 file:px-4
+                           file:rounded-full file:border-0
+                           file:text-sm file:font-semibold
+                           file:bg-orange-500 file:text-white
+                           hover:file:bg-orange-400"
+                />
+              </div>
+            </>
+          )}
+
+          {/* PRO / PREMIUM */}
+          {(selectedPlan === "pro" || selectedPlan === "premium") && (
+            <>
+              <div>
+                <label className="block font-medium mb-1">
                   Nombre del negocio
                 </label>
                 <Input
@@ -1049,11 +1169,10 @@ const RegisterBusinessPage = () => {
                   required
                   placeholder="Ejemplo: Taquería El Buen Sabor"
                 />
-                <label className="font-semibold text-sm mb-1 block">
-                  Categoría
-                </label>
+              </div>
+              <div>
+                <label className="block font-medium mb-1">Categoría</label>
                 <Select
-                  name="categoria"
                   value={formData.categoria}
                   onValueChange={handleCategoryChange}
                 >
@@ -1068,9 +1187,9 @@ const RegisterBusinessPage = () => {
                     ))}
                   </SelectContent>
                 </Select>
-                <label className="font-semibold text-sm mb-1 block">
-                  Teléfono
-                </label>
+              </div>
+              <div>
+                <label className="block font-medium mb-1">Teléfono</label>
                 <Input
                   name="telefono"
                   value={formData.telefono}
@@ -1078,182 +1197,54 @@ const RegisterBusinessPage = () => {
                   required
                   placeholder="Ejemplo: 555-123-4567"
                 />
-                <label className="font-semibold text-sm mb-1 block">
-                  Dirección
-                </label>
+              </div>
+              <div>
+                <label className="block font-medium mb-1">Dirección</label>
                 <Textarea
                   name="direccion"
                   value={formData.direccion}
                   onChange={handleChange}
                   required
-                  placeholder="Ejemplo: Av. Juárez 123, Iztapalapa"
+                  placeholder="Ejemplo: The Business Address"
                 />
-                <label className="font-semibold text-sm mb-1 block">
-                  Descripción del negocio
-                </label>
-                <Textarea
-                  name="descripcion"
-                  value={formData.descripcion}
-                  onChange={handleChange}
-                  placeholder="Describe tu negocio brevemente"
-                />
-                <div>
-                  <label className="font-semibold text-sm mb-1 block">
-                    Imagen del negocio
-                  </label>
-                  {previewUrl && (
-                    <div className="mt-4">
-                      <p className="text-sm text-gray-500 mb-1">Vista previa:</p>
-                      <img
-                        src={previewUrl}
-                        alt="Vista previa"
-                        className="w-40 h-auto rounded-md border"
-                      />
-                    </div>
-                  )}
-                  <input
-                    type="file"
-                    name="imagen"
-                    accept="image/*"
-                    onChange={async (e) => {
-                      const file = e.target.files[0];
-                      if (!file) return;
-                      setImagenNegocio(file);
-                      const localUrl = URL.createObjectURL(file);
-                      setPreviewUrl(localUrl);
+              </div>
+            </>
+          )}
 
-                      try {
-                        const fileExt = file.name.split(".").pop();
-                        const fileName = `${Date.now()}.${fileExt}`;
-                        const filePath = `negocios/${fileName}`;
-
-                        const { error } = await supabase.storage
-                          .from("negocios")
-                          .upload(filePath, file, {
-                            cacheControl: "3600",
-                            upsert: false,
-                          });
-
-                        if (error) {
-                          toastify.error("❌ No se pudo subir la imagen.");
-                          return;
-                        }
-
-                        const { data: urlData } = supabase.storage
-                          .from("negocios")
-                          .getPublicUrl(filePath);
-
-                        setFormData((prev) => ({
-                          ...prev,
-                          imagen_url: urlData?.publicUrl || "",
-                        }));
-                      } catch (err) {
-                        console.error("Error al subir imagen:", err);
-                        toastify.error("❌ No se pudo subir la imagen.");
-                      }
-                    }}
-                    className="block w-full text-sm text-gray-700
-                             file:mr-4 file:py-2 file:px-4
-                             file:rounded-full file:border-0
-                             file:text-sm file:font-semibold
-                             file:bg-orange-500 file:text-white
-                             hover:file:bg-orange-400"
-                  />
-                </div>
-              </>
-            )}
-
-            {/* PRO / PREMIUM */}
-            {(selectedPlan === "pro" || selectedPlan === "premium") && (
+          <Button
+            type="submit"
+            disabled={isSubmitting}
+            className="w-full bg-blue-600 hover:bg-blue-700 text-white text-lg flex items-center justify-center gap-2"
+          >
+            {isSubmitting ? (
               <>
-                <div>
-                  <label className="block font-medium mb-1">
-                    Nombre del negocio
-                  </label>
-                  <Input
-                    name="nombre"
-                    value={formData.nombre}
-                    onChange={handleChange}
-                    required
-                    placeholder="Ejemplo: Taquería El Buen Sabor"
-                  />
-                </div>
-                <div>
-                  <label className="block font-medium mb-1">Categoría</label>
-                  <Select
-                    value={formData.categoria}
-                    onValueChange={handleCategoryChange}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Selecciona una categoría" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {categories.map((cat) => (
-                        <SelectItem key={cat} value={cat}>
-                          {cat}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <label className="block font-medium mb-1">Teléfono</label>
-                  <Input
-                    name="telefono"
-                    value={formData.telefono}
-                    onChange={handleChange}
-                    required
-                    placeholder="Ejemplo: 555-123-4567"
-                  />
-                </div>
-                <div>
-                  <label className="block font-medium mb-1">Dirección</label>
-                  <Textarea
-                    name="direccion"
-                    value={formData.direccion}
-                    onChange={handleChange}
-                    required
-                    placeholder="Ejemplo: The Business Address"
-                  />
-                </div>
+                <svg
+                  className="animate-spin h-5 w-5 text-white"
+                  xmlns="http://www.w3.org/2000/svg"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                >
+                  <circle
+                    className="opacity-25"
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    strokeWidth="4"
+                  ></circle>
+                  <path
+                    className="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
+                  ></path>
+                </svg>
+                Registrando...
               </>
+            ) : (
+              "Registrar Negocio"
             )}
-
-            <Button
-              type="submit"
-              disabled={isSubmitting}
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white text-lg flex items-center justify-center gap-2"
-            >
-              {isSubmitting ? (
-                <>
-                  <svg
-                    className="animate-spin h-5 w-5 text-white"
-                    xmlns="http://www.w3.org/2000/svg"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                  >
-                    <circle
-                      className="opacity-25"
-                      cx="12"
-                      cy="12"
-                      r="10"
-                      stroke="currentColor"
-                      strokeWidth="4"
-                    ></circle>
-                    <path
-                      className="opacity-75"
-                      fill="currentColor"
-                      d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
-                    ></path>
-                  </svg>
-                  Registrando...
-                </>
-              ) : (
-                "Registrar Negocio"
-              )}
-            </Button>
-          </form>
-        )
+          </Button>
+        </form>
       )}
     </main>
   );

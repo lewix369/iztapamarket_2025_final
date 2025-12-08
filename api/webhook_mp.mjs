@@ -199,15 +199,47 @@ async function syncProfileAndBusiness(supabaseAdmin, payment) {
     return { ok: false, reason: "no_admin_client" };
   }
 
-  const { email, plan_type } = deriveEmailAndPlanFromPayment(payment);
+  const derived = deriveEmailAndPlanFromPayment(payment);
+  let email = derived.email;
+  const plan_type = derived.plan_type;
+  const projectSlug =
+    derived.raw?.parts?.project ||
+    derived.raw?.md?.project ||
+    derived.raw?.md?.business_slug ||
+    null;
+
+  const wantsPaid = ["pro", "premium"].includes(plan_type);
+
+  // 1) Intentar encontrar negocio por slug si no tenemos email todavía
+  let negocio = null;
+
+  if (!email && projectSlug) {
+    try {
+      const { data: negociosBySlug, error: negSlugErr } = await supabaseAdmin
+        .from("negocios")
+        .select("id, owner_email, owner_user_id, user_id, plan_type, status, estado_pago")
+        .eq("slug", projectSlug)
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+      if (negSlugErr) {
+        console.error("webhook_mp: negocios lookup by slug error", negSlugErr);
+      } else if (negociosBySlug && negociosBySlug.length > 0) {
+        negocio = negociosBySlug[0];
+        if (!email && negocio.owner_email) {
+          email = negocio.owner_email;
+        }
+      }
+    } catch (e) {
+      console.error("webhook_mp: negocios lookup by slug exception", e);
+    }
+  }
 
   if (!email) {
     return { ok: false, reason: "no_email_for_payment" };
   }
 
-  const wantsPaid = ["pro", "premium"].includes(plan_type);
-
-  // 1) Buscar profile por email
+  // 2) Buscar profile por email
   let user_id = null;
   let profileId = null;
 
@@ -240,23 +272,24 @@ async function syncProfileAndBusiness(supabaseAdmin, payment) {
     console.error("webhook_mp: profile lookup exception", e);
   }
 
-  // 2) Buscar negocio existente por owner_email
-  let negocio = null;
-  try {
-    const { data: negocios, error: negErr } = await supabaseAdmin
-      .from("negocios")
-      .select("id, owner_email, owner_user_id, user_id, plan_type, status, estado_pago")
-      .eq("owner_email", email)
-      .order("created_at", { ascending: false })
-      .limit(1);
+  // 2) Buscar negocio existente por owner_email (si aún no lo encontramos por slug)
+  if (!negocio) {
+    try {
+      const { data: negocios, error: negErr } = await supabaseAdmin
+        .from("negocios")
+        .select("id, owner_email, owner_user_id, user_id, plan_type, status, estado_pago")
+        .eq("owner_email", email)
+        .order("created_at", { ascending: false })
+        .limit(1);
 
-    if (negErr) {
-      console.error("webhook_mp: negocios lookup error", negErr);
-    } else if (negocios && negocios.length > 0) {
-      negocio = negocios[0];
+      if (negErr) {
+        console.error("webhook_mp: negocios lookup error", negErr);
+      } else if (negocios && negocios.length > 0) {
+        negocio = negocios[0];
+      }
+    } catch (e) {
+      console.error("webhook_mp: negocios lookup exception", e);
     }
-  } catch (e) {
-    console.error("webhook_mp: negocios lookup exception", e);
   }
 
   const updatePayload = {

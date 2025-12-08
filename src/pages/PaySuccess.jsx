@@ -35,22 +35,40 @@ export default function PaySuccess() {
       merchant_order_id === "" &&
       (planParam === "free" || url_status === "free"));
 
+  // ¿La URL trae alguna referencia real de MP?
+  const hasAnyRef = useMemo(
+    () =>
+      Boolean(
+        (payment_id && payment_id !== "") ||
+          (merchant_order_id && merchant_order_id !== "") ||
+          (preference_id && preference_id !== "") ||
+          (external_reference && external_reference !== "")
+      ),
+    [payment_id, merchant_order_id, preference_id, external_reference]
+  );
+
   // Base del backend (acepta relativo o absoluto) — con fallback local robusto
   const API_BASE = useMemo(() => {
-    const api = (import.meta.env.VITE_API_BASE || import.meta.env.VITE_MP_BASE || "").trim();
+    const api =
+      (import.meta.env.VITE_API_BASE || import.meta.env.VITE_MP_BASE || "").trim();
     if (!api) {
       // Fallback seguro para dev local si no vienen variables
       return "http://127.0.0.1:3001/api";
     }
     if (/^https?:\/\//i.test(api)) return api.replace(/\/$/, "");
-    const origin = (typeof window !== "undefined" ? window.location.origin : "").replace(/\/$/, "");
-    return `${origin}${api.startsWith("/") ? "" : "/"}${api}`.replace(/\/$/, "");
+    const origin =
+      typeof window !== "undefined" ? window.location.origin : "";
+    return `${origin.replace(/\/$/, "")}${api.startsWith("/") ? "" : "/"}${api}`.replace(
+      /\/$/,
+      ""
+    );
   }, []);
 
   // Feature flags
   const AUTH_AUTO_LOGIN =
     (import.meta.env.VITE_AUTH_AUTO_LOGIN || "0").toString() === "1";
-  const VERIFY_MP = (import.meta.env.VITE_VERIFY_MP || "1").toString() === "1";
+  const VERIFY_MP =
+    (import.meta.env.VITE_VERIFY_MP || "1").toString() === "1";
 
   // Supabase (frontend)
   const supabase = useMemo(() => {
@@ -147,38 +165,39 @@ export default function PaySuccess() {
     return "failed";
   }
 
-  const verdictFromOrder = React.useCallback((ord) => {
-    const hasApproved =
-      Array.isArray(ord?.payments) &&
-      ord.payments.some((p) => String(p?.status).toLowerCase() === "approved");
-    if (hasApproved) return "approved";
+  const verdictFromOrder = React.useCallback(
+    (ord) => {
+      const hasApproved =
+        Array.isArray(ord?.payments) &&
+        ord.payments.some(
+          (p) => String(p?.status).toLowerCase() === "approved"
+        );
+      if (hasApproved) return "approved";
 
-    const os = String(ord?.order_status || "").toLowerCase();
-    if (os === "payment_required") return "pending";
+      const os = String(ord?.order_status || "").toLowerCase();
+      if (os === "payment_required") return "pending";
 
-    const firstStatus =
-      Array.isArray(ord?.payments) && ord.payments[0]?.status
-        ? String(ord.payments[0].status).toLowerCase()
-        : "";
-    if (WAIT_STATUSES.has(firstStatus)) return "pending";
+      const firstStatus =
+        Array.isArray(ord?.payments) && ord.payments[0]?.status
+          ? String(ord.payments[0].status).toLowerCase()
+          : "";
+      if (WAIT_STATUSES.has(firstStatus)) return "pending";
 
-    return "failed";
-  }, [WAIT_STATUSES]);
+      return "failed";
+    },
+    [WAIT_STATUSES]
+  );
 
-  // 0.5) Si la URL ya vino con approved/success, redirigir de inmediato a /registro con plan/email saneados
+  // 0.5) Si la URL ya vino con approved/success
+  // - Si NO hay referencias de MP => tratamos como prueba manual y forzamos aprobado
+  //   para que el flujo de registro se active.
+  // - Si SÍ hay referencias => dejamos todo al verificador real + upsert.
   useEffect(() => {
     if (isFree) return;
 
-    const urlApproved =
-      url_status === "approved" || url_status === "success";
-    const hasAnyRef = Boolean(
-      payment_id || merchant_order_id || preference_id || external_reference
-    );
-
-    // Si la URL no marca approved/success, no hacemos nada
+    const urlApproved = url_status === "approved" || url_status === "success";
     if (!urlApproved) return;
 
-    // Recupera y normaliza plan/email desde URL o localStorage (fallback)
     const rawPlan =
       (planParam || extPlan || localStorage.getItem("reg_plan") || "pro").toLowerCase();
     const planF = rawPlan.includes("premium") ? "premium" : rawPlan || "pro";
@@ -193,64 +212,46 @@ export default function PaySuccess() {
       .trim()
       .toLowerCase();
 
-    // 🔁 Fallback ligero: si no hay IDs de pago (payment_id / merchant_order_id / preference_id / external_reference),
-    // igual mandamos al registro con el plan/email que tengamos. Esto permite probar
-    // /pago/success?status=approved&plan=pro aunque no haya referencias de MP.
+    // Caso 1: URL de prueba manual (sin referencias de MP)
     if (!hasAnyRef) {
-      const qNoRef = new URLSearchParams();
-      qNoRef.set("plan", planF);
-      if (emailF) qNoRef.set("email", emailF);
-      qNoRef.set("paid", "approved");
+      const fakeTitle =
+        planF === "premium"
+          ? "Plan PREMIUM IztapaMarket"
+          : "Plan PRO IztapaMarket";
 
-      try {
-        if (window.__ps_redirected) return;
-        window.__ps_redirected = true;
-        if (window.__ps_timer) {
-          clearTimeout(window.__ps_timer);
-          window.__ps_timer = null;
-        }
-      } catch {}
+      const fake = {
+        status: "approved",
+        additional_info: {
+          items: [{ title: fakeTitle }],
+          payer: { email: emailF },
+        },
+        payer: { email: emailF },
+      };
 
-      safeNavigate(`/registro?${qNoRef.toString()}`);
+      setDetails(fake);
+      setVerified("approved");
+      setLoading(false);
+      // No navegamos aquí. Dejamos que el efecto de upsert
+      // haga SIEMPRE el redirect final a /registro.
       return;
     }
 
-    // Toma todos los parámetros actuales y fuerza los que necesitamos cuando sí hay referencias de pago
-    const q = new URLSearchParams(window.location.search);
-    q.set("plan", planF);
-    if (emailF) q.set("email", emailF);
-    q.set("paid", "approved");
-
-    // Evitar bucles de navegación
-    try {
-      if (window.__ps_redirected) return;
-      window.__ps_redirected = true;
-      if (window.__ps_timer) {
-        clearTimeout(window.__ps_timer);
-        window.__ps_timer = null;
-      }
-    } catch {}
-
-    // Redirección inmediata al formulario
-    safeNavigate(`/registro?${q.toString()}`);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Caso 2: hay referencias reales => no hacemos nada.
+    // El efecto de verificación + upsert se encargará.
   }, [
     isFree,
     url_status,
-    payment_id,
-    merchant_order_id,
-    preference_id,
-    external_reference,
-    emailParam,
-    extEmail,
     planParam,
     extPlan,
-    navigate,
+    emailParam,
+    extEmail,
+    hasAnyRef,
   ]);
 
   // 1) Verificación real con backend (polling corto)
   useEffect(() => {
-    if (isFree || !VERIFY_MP) return;
+    // En FREE o en pruebas sin referencias, NO verificamos contra backend
+    if (isFree || !VERIFY_MP || !hasAnyRef) return;
     let cancelled = false;
 
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -265,7 +266,9 @@ export default function PaySuccess() {
       if (res.status === 404) return { notFound: true };
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const err = new Error(data?.error || data?.message || `HTTP ${res.status}`);
+        const err = new Error(
+          data?.error || data?.message || `HTTP ${res.status}`
+        );
         err.status = res.status;
         throw err;
       }
@@ -331,7 +334,9 @@ export default function PaySuccess() {
         // 2) merchant_order_id
         if (merchant_order_id) {
           const orderCall = () =>
-            getMaybe(`${base}/mp/order/${encodeURIComponent(merchant_order_id)}`);
+            getMaybe(
+              `${base}/mp/order/${encodeURIComponent(merchant_order_id)}`
+            );
 
           const res = await pollUntilStable(
             () => tryWithBackoff(orderCall, { tries: 2, baseDelay: 700 }),
@@ -400,7 +405,17 @@ export default function PaySuccess() {
     return () => {
       cancelled = true;
     };
-  }, [API_BASE, payment_id, merchant_order_id, external_reference, isFree, VERIFY_MP, verdictFromOrder, verdictFromPayment]);
+  }, [
+    API_BASE,
+    payment_id,
+    merchant_order_id,
+    external_reference,
+    isFree,
+    VERIFY_MP,
+    hasAnyRef,
+    verdictFromOrder,
+    verdictFromPayment,
+  ]);
 
   // 🚀 Opción 3: autologin local si es correo de prueba (testuser) y pago aprobado
   useEffect(() => {
@@ -434,60 +449,63 @@ export default function PaySuccess() {
       navigate("/mi-negocio", { replace: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [verified, url_status, emailParam, extEmail, details, planParam, extPlan, navigate]);
+  }, [
+    verified,
+    url_status,
+    emailParam,
+    extEmail,
+    details,
+    planParam,
+    extPlan,
+    navigate,
+  ]);
 
-  // 2) Upsert en Supabase + redirección al formulario/mi-negocio
+  // 2) Upsert en Supabase + redirección al formulario
   useEffect(() => {
     async function upsertProfileAndRedirect({ plan, email, paidFlag }) {
+      // Si es FREE, siempre mandamos directo al formulario FREE
       if (String(plan).toLowerCase() === "free") {
         safeNavigate(`/registro?plan=free`);
         return;
       }
+
       if (!supabase || !email) return;
+
       const now = new Date().toISOString();
+      const normalizedEmail = email.toLowerCase();
+
+      // 1) Actualizar/crear profile
       try {
         await supabase
           .from("profiles")
           .upsert(
-            { email: email.toLowerCase(), plan_type: plan, updated_at: now },
+            { email: normalizedEmail, plan_type: plan, updated_at: now },
             { onConflict: "email" }
           );
       } catch (e) {
         console.warn("profiles upsert warn:", e?.message || e);
       }
 
+      // 2) Guardar en localStorage
       try {
-        localStorage.setItem("reg_email", email.toLowerCase());
+        localStorage.setItem("reg_email", normalizedEmail);
         localStorage.setItem("reg_plan", plan);
       } catch {}
 
-      let hasBusiness = false;
-      const normalizedEmail = email.toLowerCase();
-      try {
-        const { data: negociosRows, error: negociosErr } = await supabase
-          .from("negocios")
-          .select("id")
-          .eq("email", normalizedEmail)
-          .limit(1);
-        if (!negociosErr && Array.isArray(negociosRows) && negociosRows.length > 0) {
-          hasBusiness = true;
-        }
-      } catch (e) {
-        console.warn("check negocio by email warn:", e?.message || e);
-      }
-
+      // 3) (Opcional) intentar autologin con magic link,
+      // SIEMPRE mandando al formulario de registro
       try {
         const {
           data: { user },
         } = await supabase.auth.getUser();
+
         if (AUTH_AUTO_LOGIN && !user && String(plan).toLowerCase() !== "free") {
-          const nextPath = hasBusiness
-            ? "/mi-negocio"
-            : `/registro?plan=${encodeURIComponent(
-                plan
-              )}&email=${encodeURIComponent(normalizedEmail)}${
-                paidFlag ? `&paid=${encodeURIComponent(paidFlag)}` : ""
-              }`;
+          const nextPath = `/registro?plan=${encodeURIComponent(
+            plan
+          )}&email=${encodeURIComponent(normalizedEmail)}${
+            paidFlag ? `&paid=${encodeURIComponent(paidFlag)}` : ""
+          }`;
+
           const launched = await tryAutoMagicLink(email, nextPath);
           if (launched) {
             try {
@@ -502,14 +520,11 @@ export default function PaySuccess() {
         }
       } catch {}
 
+      // 4) Redirect FINAL: siempre al formulario de registro
       const qs = new URLSearchParams({ plan, email: normalizedEmail });
       if (paidFlag) qs.set("paid", paidFlag);
 
-      if (hasBusiness) {
-        safeNavigate("/mi-negocio");
-      } else {
-        safeNavigate(`/registro?${qs.toString()}`);
-      }
+      safeNavigate(`/registro?${qs.toString()}`);
     }
 
     async function run() {
@@ -528,7 +543,11 @@ export default function PaySuccess() {
           details?.additional_info?.payer?.email,
           localStorage.getItem("reg_email"),
           localStorage.getItem("correo_negocio"),
-        ].find(Boolean)?.toString().trim().toLowerCase() || "";
+        ]
+          .find(Boolean)
+          ?.toString()
+          .trim()
+          .toLowerCase() || "";
 
       const title0 = details?.additional_info?.items?.[0]?.title || "";
       const inferredFromTitle =

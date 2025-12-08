@@ -119,8 +119,19 @@ const LoginPage = () => {
     setLoading(false);
 
     if (error) {
-      setError("Correo o contraseña incorrectos.");
-      console.error(error);
+      console.error("❌ Error login:", error);
+
+      let msg = "No se pudo autenticar correctamente. Intenta de nuevo.";
+
+      const raw = (error.message || "").toLowerCase();
+      if (raw.includes("invalid login credentials")) {
+        msg = "Correo o contraseña incorrectos o usuario no registrado.";
+      } else if (raw.includes("failed to fetch")) {
+        msg = "No se pudo contactar al servidor de autenticación. Revisa tu conexión o inténtalo de nuevo en unos minutos.";
+      }
+
+      setError(msg);
+      alert(msg);
       return;
     }
 
@@ -132,7 +143,10 @@ const LoginPage = () => {
     const { data: userData, error: userError } = await supabase.auth.getUser();
     if (!userData?.user?.id || userError) {
       console.error("❌ No se pudo obtener el user_id", userError);
-      alert("No se pudo autenticar correctamente.");
+      const msg =
+        userError?.message || "No se pudo autenticar correctamente.";
+      setError(msg);
+      alert(msg);
       return;
     }
     const userId = String(userData.user.id).trim();
