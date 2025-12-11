@@ -1,25 +1,45 @@
-// src/lib/api/emailClient.js
-export async function sendWelcomeEmail({ to, businessName, businessSlug }) {
-  try {
-    const base = import.meta.env.VITE_API_BASE || "http://localhost:3001/api";
+// src/lib/emailClient.js
 
-    const resp = await fetch(`${base}/send-welcome-email`, {
+const API_BASE =
+  // Producción: dominio público en Vercel → backend en Render
+  (typeof window !== "undefined" &&
+    window.location.origin.includes("iztapamarket.com"))
+    ? "https://iztapamarket-2025-final.onrender.com/api"
+    // Local / otros entornos
+    : import.meta.env.VITE_API_BASE_URL || "http://localhost:3001/api";
+
+console.log("[emailClient] API_BASE para welcome-email:", API_BASE);
+
+export async function sendWelcomeEmail(payload) {
+  try {
+    const res = await fetch(`${API_BASE}/send-welcome-email`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ to, businessName, businessSlug }),
+      body: JSON.stringify(payload),
     });
 
-    const data = await resp.json().catch(() => ({}));
+    const text = await res.text().catch(() => "");
 
-    if (!resp.ok || data.ok === false) {
-      console.error("[sendWelcomeEmail] fallo", data);
-      return { ok: false, error: data.error || "Error enviando email" };
+    if (!res.ok) {
+      console.error(
+        "[emailClient] ❌ sendWelcomeEmail fallo",
+        res.status,
+        text
+      );
+      return { ok: false, status: res.status, error: text || "Request failed" };
     }
 
-    console.log("[sendWelcomeEmail] ok");
-    return { ok: true };
-  } catch (e) {
-    console.error("[sendWelcomeEmail] exception", e);
-    return { ok: false, error: String(e) };
+    let data = {};
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch {
+      data = {};
+    }
+
+    console.log("[emailClient] ✅ sendWelcomeEmail OK", data);
+    return { ok: true, ...data };
+  } catch (err) {
+    console.error("[emailClient] ❌ sendWelcomeEmail exception", err);
+    return { ok: false, error: String(err) };
   }
 }
