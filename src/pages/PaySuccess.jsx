@@ -51,19 +51,35 @@ export default function PaySuccess() {
 
   // Base del backend (acepta relativo o absoluto) — con fallback local robusto
   const API_BASE = useMemo(() => {
-    const api =
+    let api =
       (import.meta.env.VITE_API_BASE || import.meta.env.VITE_MP_BASE || "").trim();
-    if (!api) {
-      // Fallback seguro para dev local si no vienen variables
-      return "http://127.0.0.1:3001/api";
+
+    // Caso Vercel: viene "/api" → lo tratamos como no configurado,
+    // así forzamos usar directamente el backend de Render en producción.
+    if (api === "/api") {
+      api = "";
     }
-    if (/^https?:\/\//i.test(api)) return api.replace(/\/$/, "");
-    const origin =
-      typeof window !== "undefined" ? window.location.origin : "";
-    return `${origin.replace(/\/$/, "")}${api.startsWith("/") ? "" : "/"}${api}`.replace(
-      /\/$/,
-      ""
-    );
+
+    // 1) Si viene algo en env, lo normalizamos
+    if (api) {
+      if (/^https?:\/\//i.test(api)) return api.replace(/\/$/, "");
+      const origin =
+        typeof window !== "undefined" ? window.location.origin : "";
+      return `${origin.replace(/\/$/, "")}${
+        api.startsWith("/") ? "" : "/"
+      }${api}`.replace(/\/$/, "");
+    }
+
+    // 2) Si estamos en dominio público, apuntamos directo al backend de Render
+    if (
+      typeof window !== "undefined" &&
+      window.location.hostname.includes("iztapamarket.com")
+    ) {
+      return "https://iztapamarket-2025-final.onrender.com/api";
+    }
+
+    // 3) Fallback para desarrollo local
+    return "http://127.0.0.1:3001/api";
   }, []);
 
   // 🔔 NUEVO: helper para enviar email de bienvenida (pro/premium)
