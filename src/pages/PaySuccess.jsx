@@ -1,6 +1,8 @@
+
 import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { useSearchParams, Link, useNavigate } from "react-router-dom";
 import { createClient } from "@supabase/supabase-js";
+import { sendWelcomeEmail as sendWelcomeEmailApi } from "@/lib/emailClient";
 
 export default function PaySuccess() {
   const navigate = useNavigate();
@@ -82,20 +84,15 @@ export default function PaySuccess() {
     return "http://127.0.0.1:3001/api";
   }, []);
 
-  // 🔔 NUEVO: helper para enviar email de bienvenida (pro/premium)
+  // 🔔 Helper para enviar email de bienvenida (pro/premium) usando emailClient
   const sendWelcomeEmail = useCallback(
     async ({ email }) => {
-      if (!email || !API_BASE) return;
+      if (!email) return;
       try {
-        const res = await fetch(`${API_BASE}/send-welcome-email`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ to: email }),
-        });
+        const result = await sendWelcomeEmailApi({ to: email });
 
-        const data = await res.json().catch(() => ({}));
-        if (!data?.ok) {
-          console.error("[WelcomeEmail] Error al enviar correo:", data);
+        if (!result?.ok) {
+          console.error("[WelcomeEmail] Error al enviar correo:", result);
         } else {
           console.log("[WelcomeEmail] ✅ Enviado a", email);
         }
@@ -103,7 +100,7 @@ export default function PaySuccess() {
         console.warn("[WelcomeEmail] ❌ Excepción enviando correo:", e);
       }
     },
-    [API_BASE]
+    [sendWelcomeEmailApi]
   );
 
   // Feature flags
