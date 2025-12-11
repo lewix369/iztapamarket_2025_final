@@ -5,6 +5,7 @@ import { useNavigate, useSearchParams, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { sendWelcomeEmail } from "@/lib/emailClient";
 import {
   Select,
   SelectContent,
@@ -59,6 +60,23 @@ const REQUIRE_LOGIN_AFTER_PAYMENT =
     .toString()
     .toLowerCase() === "true";
 
+// Limpia estado de redirect/post-pago para evitar loops a /registro
+function clearPostPaymentState() {
+  try {
+    if (typeof window === "undefined") return;
+    // redirect usado por la pantalla de login/magic link
+    window.localStorage.removeItem("post_login_redirect");
+    window.sessionStorage.removeItem("post_login_redirect");
+    // datos de post-pago usados por /registro
+    window.localStorage.removeItem("iztapa_postpay_registro");
+  } catch (e) {
+    console.debug(
+      "[Registro] no se pudo limpiar post payment state",
+      e?.message || e
+    );
+  }
+}
+
 const MP_BASE = import.meta.env.VITE_MP_BASE || "http://127.0.0.1:3001/api";
 
 // (No usadas ahora, pero ok tenerlas)
@@ -112,9 +130,10 @@ const RegisterBusinessPage = () => {
   const [searchParams] = useSearchParams();
 
   // ✅ Plan y estado de pago (normalizado)
-  const savedPlan = (typeof window !== "undefined" && window.localStorage)
-    ? (localStorage.getItem("reg_plan") || "")
-    : "";
+  const savedPlan =
+    typeof window !== "undefined" && window.localStorage
+      ? localStorage.getItem("reg_plan") || ""
+      : "";
   const selectedPlan = normalizePlan(
     searchParams.get("plan") || savedPlan || "free"
   );
@@ -148,9 +167,10 @@ const RegisterBusinessPage = () => {
     autoParam === "1" || autoParam === "true" || autoParam === "yes";
 
   const emailFromUrl = (searchParams.get("email") || "").trim();
-  const localEmail = (typeof window !== "undefined" && window.localStorage)
-    ? (localStorage.getItem("reg_email") || "")
-    : "";
+  const localEmail =
+    typeof window !== "undefined" && window.localStorage
+      ? localStorage.getItem("reg_email") || ""
+      : "";
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -182,17 +202,26 @@ const RegisterBusinessPage = () => {
 
   // 🎯 Corrección: si el email de sesión NO coincide con el email del checkout, avisar y permitir cambiar de cuenta
   const intendedEmail = (
-    (formData.email || emailFromUrl || localEmail || "").toString().trim().toLowerCase()
+    (formData.email || emailFromUrl || localEmail || "")
+      .toString()
+      .trim()
+      .toLowerCase()
   );
   const sessionEmail = (authUser?.email || "").toString().trim().toLowerCase();
-  const emailMismatch = Boolean(intendedEmail && sessionEmail && intendedEmail !== sessionEmail);
+  const emailMismatch = Boolean(
+    intendedEmail && sessionEmail && intendedEmail !== sessionEmail
+  );
 
   const switchAccountToIntended = async () => {
     try {
       await supabase.auth.signOut();
     } catch {}
     const dest = `${location.pathname}${location.search || ""}`;
-    navigate(`/login?redirect=${encodeURIComponent(dest)}${intendedEmail ? `&email=${encodeURIComponent(intendedEmail)}` : ""}`);
+    navigate(
+      `/login?redirect=${encodeURIComponent(dest)}${
+        intendedEmail ? `&email=${encodeURIComponent(intendedEmail)}` : ""
+      }`
+    );
   };
 
   useEffect(() => {
@@ -230,9 +259,11 @@ const RegisterBusinessPage = () => {
     supabase.auth.getUser().then(({ data }) => setAuthUser(data?.user || null));
 
     // Suscribirse a cambios de sesión (login/logout)
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
-      setAuthUser(session?.user || null);
-    });
+    const { data: sub } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        setAuthUser(session?.user || null);
+      }
+    );
 
     return () => {
       sub?.subscription?.unsubscribe?.();
@@ -273,12 +304,14 @@ const RegisterBusinessPage = () => {
   // 🔗 Navegación centralizada post-registro (premium/pro): ir a /mi-negocio o forzar login con redirect
   const goToBusiness = (emailMaybe) => {
     const fallbackLocal =
-      (typeof window !== "undefined" && window.localStorage)
-        ? (localStorage.getItem("reg_email") || "")
+      typeof window !== "undefined" && window.localStorage
+        ? localStorage.getItem("reg_email") || ""
         : "";
     let emailFinal = (
-      (emailMaybe ?? formData.email ?? emailFromUrl ?? fallbackLocal ?? "")
-    ).toString().trim();
+      emailMaybe ?? formData.email ?? emailFromUrl ?? fallbackLocal ?? ""
+    )
+      .toString()
+      .trim();
 
     if (emailFinal === "null" || emailFinal === "undefined") {
       emailFinal = "";
@@ -323,7 +356,11 @@ const RegisterBusinessPage = () => {
       if (!isPaid) return;
 
       try {
-        const effectiveEmail = (formData.email || emailFromUrl || authUser?.email || "").trim().toLowerCase();
+        const effectiveEmail = (
+          formData.email || emailFromUrl || authUser?.email || ""
+        )
+          .trim()
+          .toLowerCase();
         let existing = null;
 
         // Busca por user_id primero
@@ -349,11 +386,15 @@ const RegisterBusinessPage = () => {
           navigate("/mi-negocio");
         }
       } catch (e) {
-        console.debug("[registro] skip auto-goToBusiness check:", e?.message || e);
+        console.debug(
+          "[registro] skip auto-goToBusiness check:",
+          e?.message || e
+        );
       }
     };
     run();
   }, [authUser, isPaid, selectedPlan]);
+
   useEffect(() => {
     if (
       !autoTriggered &&
@@ -689,12 +730,11 @@ const RegisterBusinessPage = () => {
 
         // ⚠️ Duplicado por índice único de FREE (nombre + dirección)
         const isDup =
-          error && (
-            error.code === "409" ||
+          error &&
+          (error.code === "409" ||
             error.code === "23505" ||
             /duplicate key value/i.test(error.message || "") ||
-            /negocios_free_name_addr_uidx/i.test(error.message || "")
-          );
+            /negocios_free_name_addr_uidx/i.test(error.message || ""));
 
         if (isDup) {
           // Buscar el registro existente por nombre/dirección/plan_type
@@ -707,8 +747,12 @@ const RegisterBusinessPage = () => {
             .maybeSingle();
 
           if (existing?.slug) {
-            toastify.success("✅ Ya existía un registro con ese nombre y dirección.");
-            navigate(`/registro/exitoso?slug=${encodeURIComponent(existing.slug)}`);
+            toastify.success(
+              "✅ Ya existía un registro con ese nombre y dirección."
+            );
+            navigate(
+              `/registro/exitoso?slug=${encodeURIComponent(existing.slug)}`
+            );
             return;
           }
 
@@ -721,10 +765,11 @@ const RegisterBusinessPage = () => {
 
           if (bySlug?.slug) {
             toastify.success("✅ Ya existía un registro coincidente.");
-            navigate(`/registro/exitoso?slug=${encodeURIComponent(bySlug.slug)}`);
+            navigate(
+              `/registro/exitoso?slug=${encodeURIComponent(bySlug.slug)}`
+            );
             return;
           }
-
         }
 
         // Si no fue duplicado (u otro error), propagamos al catch general
@@ -754,7 +799,8 @@ const RegisterBusinessPage = () => {
           setIsSubmitting(false);
           toast({
             title: "Cambia a la cuenta del pago",
-            description: "Inicia sesión con el mismo correo que usaste para pagar (se mostrará prellenado).",
+            description:
+              "Inicia sesión con el mismo correo que usaste para pagar (se mostrará prellenado).",
             variant: "destructive",
           });
           switchAccountToIntended();
@@ -785,7 +831,8 @@ const RegisterBusinessPage = () => {
           setIsSubmitting(false);
           toast({
             title: "Inicia sesión para finalizar",
-            description: "Tu pago fue aprobado. Debes iniciar sesión con el mismo correo para crear/ligar tu negocio.",
+            description:
+              "Tu pago fue aprobado. Debes iniciar sesión con el mismo correo para crear/ligar tu negocio.",
           });
           goLoginToFinish();
           return;
@@ -812,7 +859,7 @@ const RegisterBusinessPage = () => {
               .single();
 
             if (updExisting.error) throw updExisting.error;
-
+            clearPostPaymentState();
             toastify.success("✅ Negocio actualizado.");
             navigate("/mi-negocio");
             return;
@@ -823,13 +870,33 @@ const RegisterBusinessPage = () => {
         // 1) Intento INSERT directo
         const insertRes = await supabase
           .from("negocios")
-          .insert([{ ...newBusiness, email: normalizedEffectiveEmail, user_id: userId }])
-          .select()
+          .insert([
+            {
+              ...newBusiness,
+              email: normalizedEffectiveEmail,
+              user_id: userId,
+            },
+          ])
+          .select("id, slug")
           .maybeSingle();
 
         if (insertRes?.data && !insertRes.error) {
           // Insert OK
+          clearPostPaymentState();
           toastify.success("✅ Negocio creado.");
+
+          // 📨 Correo de bienvenida SOLO primera vez PRO/PREMIUM
+          const createdSlug = insertRes.data.slug || uniqueSlug;
+          if (normalizedEffectiveEmail) {
+            sendWelcomeEmail({
+              to: normalizedEffectiveEmail,
+              businessName: newBusiness.nombre,
+              businessSlug: createdSlug,
+            }).catch((e) => {
+              console.error("[welcomeEmail] fallo al enviar:", e);
+            });
+          }
+
           navigate("/mi-negocio");
           return;
         } else {
@@ -880,13 +947,17 @@ const RegisterBusinessPage = () => {
               .single();
 
             if (upd.error) throw upd.error;
+            clearPostPaymentState();
             toastify.success("✅ Negocio actualizado.");
             navigate("/mi-negocio");
             return;
           }
 
           // Si no localizamos registro (poco probable), redirige al panel y deja que el usuario lo vea.
-          toastify.info("ℹ️ Ya tenías un registro previo. Te llevamos a tu panel.");
+          clearPostPaymentState();
+          toastify.info(
+            "ℹ️ Ya tenías un registro previo. Te llevamos a tu panel."
+          );
           navigate("/mi-negocio");
           return;
         }
@@ -925,7 +996,11 @@ const RegisterBusinessPage = () => {
       // FREE: si falló por duplicado (nombre+dirección), redirige a exitoso usando el existente
       if (
         selectedPlan === "free" &&
-        (err?.code === "409" || err?.code === "23505" || /negocios_free_name_addr_uidx|duplicate key value/i.test(err?.message || ""))
+        (err?.code === "409" ||
+          err?.code === "23505" ||
+          /negocios_free_name_addr_uidx|duplicate key value/i.test(
+            err?.message || ""
+          ))
       ) {
         try {
           const { data: existing } = await supabase
@@ -937,8 +1012,12 @@ const RegisterBusinessPage = () => {
             .maybeSingle();
 
           if (existing?.slug) {
-            toastify.success("✅ Ya existía un registro con ese nombre y dirección.");
-            navigate(`/registro/exitoso?slug=${encodeURIComponent(existing.slug)}`);
+            toastify.success(
+              "✅ Ya existía un registro con ese nombre y dirección."
+            );
+            navigate(
+              `/registro/exitoso?slug=${encodeURIComponent(existing.slug)}`
+            );
             return;
           }
         } catch (e2) {
@@ -988,7 +1067,13 @@ const RegisterBusinessPage = () => {
             <p className="text-xs text-gray-500">
               Sesión activa como <strong>{authUser.email}</strong>.
               {emailMismatch && intendedEmail ? (
-                <> &nbsp;(<span className="text-yellow-700">El pago es para {intendedEmail}</span>)</>
+                <>
+                  {" "}
+                  &nbsp;
+                  <span className="text-yellow-700">
+                    (El pago es para {intendedEmail})
+                  </span>
+                </>
               ) : null}
             </p>
           )}
@@ -996,19 +1081,26 @@ const RegisterBusinessPage = () => {
       )}
 
       {/* ⚠️ Banner de advertencia si hay sesión activa, pago aprobado y desajuste de correo */}
-      {(selectedPlan === "pro" || selectedPlan === "premium") && isPaid && authUser && emailMismatch && (
-        <div className="max-w-xl mx-auto bg-yellow-50 border border-yellow-300 p-4 rounded-md mb-6 text-center">
-          <p className="text-sm text-yellow-900">
-            Estás autenticado como <strong>{sessionEmail}</strong>, pero el pago pertenece a <strong>{intendedEmail}</strong>. 
-            Para finalizar correctamente, cambia a la cuenta del pago.
-          </p>
-          <div className="mt-3">
-            <Button className="bg-yellow-600 hover:bg-yellow-700 text-white" onClick={switchAccountToIntended}>
-              Cambiar de cuenta
-            </Button>
+      {(selectedPlan === "pro" || selectedPlan === "premium") &&
+        isPaid &&
+        authUser &&
+        emailMismatch && (
+          <div className="max-w-xl mx-auto bg-yellow-50 border border-yellow-300 p-4 rounded-md mb-6 text-center">
+            <p className="text-sm text-yellow-900">
+              Estás autenticado como <strong>{sessionEmail}</strong>, pero el
+              pago pertenece a <strong>{intendedEmail}</strong>. Para finalizar
+              correctamente, cambia a la cuenta del pago.
+            </p>
+            <div className="mt-3">
+              <Button
+                className="bg-yellow-600 hover:bg-yellow-700 text-white"
+                onClick={switchAccountToIntended}
+              >
+                Cambiar de cuenta
+              </Button>
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
       {mustLoginToFinish && (
         <div className="max-w-xl mx-auto bg-white p-6 shadow rounded-lg text-center space-y-4 mb-6">

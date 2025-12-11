@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { useSearchParams, Link, useNavigate } from "react-router-dom";
 import { createClient } from "@supabase/supabase-js";
 
@@ -14,13 +14,15 @@ export default function PaySuccess() {
     params.get("status") || params.get("collection_status") || ""
   ).toLowerCase();
   const preference_id = params.get("preference_id") || "";
-  const emailParam = params.get("email") || "";
+  const emailParam = (params.get("email") || "").toLowerCase();
   const planParam = (params.get("plan") || "").toLowerCase();
   const tagParam = params.get("tag") || "";
   const external_reference = params.get("external_reference") || "";
 
+  const urlApproved = url_status === "approved" || url_status === "success";
+
   // email|plan|tag desde external_reference (normaliza también el email a minúsculas)
-  const [extEmail, extPlan] = React.useMemo(() => {
+  const [extEmail, extPlan] = useMemo(() => {
     if (!external_reference) return ["", ""];
     const [e = "", p = ""] = external_reference.split("|");
     return [e.toLowerCase(), (p || "").toLowerCase()];
@@ -64,6 +66,30 @@ export default function PaySuccess() {
     );
   }, []);
 
+  // 🔔 NUEVO: helper para enviar email de bienvenida (pro/premium)
+  const sendWelcomeEmail = useCallback(
+    async ({ email }) => {
+      if (!email || !API_BASE) return;
+      try {
+        const res = await fetch(`${API_BASE}/send-welcome-email`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ to: email }),
+        });
+
+        const data = await res.json().catch(() => ({}));
+        if (!data?.ok) {
+          console.error("[WelcomeEmail] Error al enviar correo:", data);
+        } else {
+          console.log("[WelcomeEmail] ✅ Enviado a", email);
+        }
+      } catch (e) {
+        console.warn("[WelcomeEmail] ❌ Excepción enviando correo:", e);
+      }
+    },
+    [API_BASE]
+  );
+
   // Feature flags
   const AUTH_AUTO_LOGIN =
     (import.meta.env.VITE_AUTH_AUTO_LOGIN || "0").toString() === "1";
@@ -78,7 +104,7 @@ export default function PaySuccess() {
     return createClient(url, key, { auth: { persistSession: true } });
   }, []);
 
-  const tryAutoMagicLink = React.useCallback(
+  const tryAutoMagicLink = useCallback(
     async (email, nextPath) => {
       if (!email || !API_BASE) return false;
       try {
@@ -121,7 +147,7 @@ export default function PaySuccess() {
   const [loading, setLoading] = useState(true);
   const [regMsg, setRegMsg] = useState("");
 
-  const safeNavigate = React.useCallback(
+  const safeNavigate = useCallback(
     (path) => {
       try {
         window.__ps_redirected = true;
@@ -165,7 +191,7 @@ export default function PaySuccess() {
     return "failed";
   }
 
-  const verdictFromOrder = React.useCallback(
+  const verdictFromOrder = useCallback(
     (ord) => {
       const hasApproved =
         Array.isArray(ord?.payments) &&
@@ -194,8 +220,6 @@ export default function PaySuccess() {
   // - Si SÍ hay referencias => dejamos todo al verificador real + upsert.
   useEffect(() => {
     if (isFree) return;
-
-    const urlApproved = url_status === "approved" || url_status === "success";
     if (!urlApproved) return;
 
     const rawPlan =
@@ -231,8 +255,7 @@ export default function PaySuccess() {
       setDetails(fake);
       setVerified("approved");
       setLoading(false);
-      // No navegamos aquí. Dejamos que el efecto de upsert
-      // haga SIEMPRE el redirect final a /registro.
+      // Dejamos que el efecto de upsert haga el redirect final a /registro.
       return;
     }
 
@@ -240,7 +263,7 @@ export default function PaySuccess() {
     // El efecto de verificación + upsert se encargará.
   }, [
     isFree,
-    url_status,
+    urlApproved,
     planParam,
     extPlan,
     emailParam,
@@ -422,9 +445,7 @@ export default function PaySuccess() {
     const email =
       (emailParam || extEmail || details?.payer?.email || "").toLowerCase();
 
-    const approvedByUrl =
-      url_status === "approved" || url_status === "success";
-    const approved = approvedByUrl || verified === "approved";
+    const approved = urlApproved || verified === "approved";
 
     if (!approved || !email) return;
 
@@ -451,7 +472,7 @@ export default function PaySuccess() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     verified,
-    url_status,
+    urlApproved,
     emailParam,
     extEmail,
     details,
@@ -492,7 +513,16 @@ export default function PaySuccess() {
         localStorage.setItem("reg_plan", plan);
       } catch {}
 
-      // 3) (Opcional) intentar autologin con magic link,
+      // 3) Enviar correo de bienvenida solo para planes de pago (pro/premium)
+      try {
+        if (plan && String(plan).toLowerCase() !== "free" && normalizedEmail) {
+          await sendWelcomeEmail({ email: normalizedEmail });
+        }
+      } catch (e) {
+        console.warn("sendWelcomeEmail warn:", e?.message || e);
+      }
+
+      // 4) (Opcional) intentar autologin con magic link,
       // SIEMPRE mandando al formulario de registro
       try {
         const {
@@ -520,7 +550,7 @@ export default function PaySuccess() {
         }
       } catch {}
 
-      // 4) Redirect FINAL: siempre al formulario de registro
+      // 5) Redirect FINAL: siempre al formulario de registro
       const qs = new URLSearchParams({ plan, email: normalizedEmail });
       if (paidFlag) qs.set("paid", paidFlag);
 
@@ -528,7 +558,14 @@ export default function PaySuccess() {
     }
 
     async function run() {
-      if (verified !== "approved") return;
+      // ✅ Condición ampliada:
+      // - Caso normal: verificación real "approved"
+      // - Fallback: verificación con error PERO la URL viene approved/success
+      const canProceed =
+        verified === "approved" || (verified === "error" && urlApproved);
+
+      if (!canProceed) return;
+
       if (!supabase) {
         setRegMsg("Supabase no configurado en el frontend.");
         return;
@@ -563,7 +600,11 @@ export default function PaySuccess() {
       }
 
       try {
-        setRegMsg("Pago confirmado. Activando plan en tu cuenta…");
+        setRegMsg(
+          verified === "error"
+            ? "Pago aprobado por URL. Activando tu plan…"
+            : "Pago confirmado. Activando plan en tu cuenta…"
+        );
         await upsertProfileAndRedirect({
           plan: planDetected === "premium" ? "premium" : "pro",
           email: payerEmail,
@@ -576,9 +617,10 @@ export default function PaySuccess() {
     }
 
     run();
-    // No cleanup needed since there is no cancellation logic
+    // No cleanup needed
   }, [
     verified,
+    urlApproved,
     details,
     planParam,
     emailParam,
@@ -586,10 +628,10 @@ export default function PaySuccess() {
     extEmail,
     extPlan,
     isFree,
-    navigate,
     AUTH_AUTO_LOGIN,
     safeNavigate,
     tryAutoMagicLink,
+    sendWelcomeEmail,
   ]);
 
   // --- UI ---
@@ -602,11 +644,13 @@ export default function PaySuccess() {
     : verified === "failed"
     ? "No pudimos confirmar tu pago"
     : verified === "error"
-    ? "Error al verificar tu pago"
+    ? urlApproved
+      ? "Pago aprobado (validación parcial)"
+      : "Error al verificar tu pago"
     : "Verificando pago…";
 
   const headerColor =
-    isFree || verified === "approved"
+    isFree || verified === "approved" || (verified === "error" && urlApproved)
       ? "text-green-600"
       : verified === "pending"
       ? "text-amber-600"
@@ -629,14 +673,16 @@ export default function PaySuccess() {
       <p className="mt-3 text-gray-700">
         {isFree
           ? "Tu plan FREE fue activado sin necesidad de pago."
-          : loading
+          : loading && verified === null
           ? "Consultando con el sistema de pagos…"
           : verified === "approved"
           ? "Tu pago se registró correctamente."
           : verified === "pending"
-          ? "Recibimos la redirección y tu pago está en proceso. Si ya te cargó, se reflejará en breve."
+          ? "Recibimos la redirección y tu pago está en proceso. Si ya se te cargó, se reflejará en breve."
           : verified === "failed"
-          ? "Recibimos la redirección, pero tu pago no aparece aprobado. Si ya te cargó, se reflejará en unos minutos."
+          ? "Recibimos la redirección, pero tu pago no aparece aprobado. Si ya se te cargó, se reflejará en unos minutos."
+          : verified === "error" && urlApproved
+          ? "Detectamos que la URL viene como aprobada. Tu plan se activará con validación parcial."
           : verified === "error"
           ? "Ocurrió un problema al validar el pago. Intenta más tarde o contáctanos."
           : "Procesando…"}
@@ -654,7 +700,8 @@ export default function PaySuccess() {
           {(isFree || verified) && (
             <span>
               {" "}
-              — verificado: <b>{isFree ? "free" : verified}</b>
+              — verificado:{" "}
+              <b>{isFree ? "free" : verified || "(pendiente)"}</b>
             </span>
           )}
         </div>
@@ -685,7 +732,7 @@ export default function PaySuccess() {
         )}
         {(planParam || extPlan || isFree) && (
           <div>
-            <b>Plan:</b> {isFree ? "free" : planParam || extPlan}
+            <b>Plan:</b> {isFree ? "free" : planParam || extPlan || "pro"}
           </div>
         )}
         {isFree && tagParam && (

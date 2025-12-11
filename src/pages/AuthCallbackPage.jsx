@@ -9,7 +9,13 @@ function readRedirectFromLocation() {
     // 1) Query param (?redirect=...)
     const sp = new URLSearchParams(window.location.search);
     let r = sp.get("redirect");
-    if (r) return r;
+    if (r) {
+      try {
+        return decodeURIComponent(r);
+      } catch {
+        return r;
+      }
+    }
 
     // 2) HashRouter case: /#/auth/callback?redirect=...
     const hash = window.location.hash || "";
@@ -17,7 +23,13 @@ function readRedirectFromLocation() {
     if (idx >= 0) {
       const hsp = new URLSearchParams(hash.slice(idx + 1));
       r = hsp.get("redirect");
-      if (r) return r;
+      if (r) {
+        try {
+          return decodeURIComponent(r);
+        } catch {
+          return r;
+        }
+      }
     }
 
     // 3) Fallback: localStorage

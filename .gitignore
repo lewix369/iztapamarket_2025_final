@@ -37,3 +37,15 @@ backend.log
 .cursor/
 .cursor/
 .cursor/
+
+# IztapaMarket – backups y scripts que no van a producción
+*.bak.*
+*.tmp
+audit/
+server.mjs.bak.*
+src/lib/api/routes/*.bak.*
+*.sh
+vite
+iztapamarket@1.0.0
+supabase/functions/sync_paid_business/
+README_VERIFY.md

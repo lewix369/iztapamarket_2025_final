@@ -9,17 +9,27 @@ import { Label } from "@/components/ui/label";
 
 const ADMIN_EMAIL = "luis.carrillo.laguna@gmail.com";
 
+const safeDecodeURIComponent = (value) => {
+  if (!value) return "";
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+};
+
 const LoginPage = () => {
   const [searchParams] = useSearchParams();
   // Normaliza el destino: si viene vacío o apunta al Home, forzamos /mi-negocio
-  const requestedRedirect = searchParams.get("redirect") || "";
+  const rawRedirect = searchParams.get("redirect") || "";
+  const requestedRedirect = safeDecodeURIComponent(rawRedirect);
+  const defaultEmail = searchParams.get("email") || "";
   const redirect =
     !requestedRedirect ||
     requestedRedirect === "/" ||
     requestedRedirect === "/#/"
       ? "/mi-negocio"
       : requestedRedirect;
-  const defaultEmail = searchParams.get("email") || "";
   const [email, setEmail] = useState(defaultEmail);
   const [password, setPassword] = useState("");
   const [mode, setMode] = useState("magic"); // "magic" | "password"
@@ -68,17 +78,23 @@ const LoginPage = () => {
     try {
       const origin = window.location.origin;
 
-      // Destino post-login: query ?redirect, si no el guardado, si no /mi-negocio
-      const after =
-        redirect ||
+      // Destino base post-login: primero lo que viene en ?redirect, luego lo guardado, luego /mi-negocio
+      const storedRedirect =
         (typeof window !== "undefined" &&
           localStorage.getItem("post_login_redirect")) ||
-        "/mi-negocio";
+        "";
 
-      // ✅ Redirige SIEMPRE a /auth/callback (BrowserRouter)
+      let after = redirect || storedRedirect || "/mi-negocio";
+      if (!after || after === "/" || after === "/#/") {
+        after = "/mi-negocio";
+      }
+
+      // En este punto `after` conserva TODO lo que venía de éxito de pago,
+      // por ejemplo: /registro?plan=premium&email=...&paid=approved
+
       const callback = `${origin}/auth/callback?redirect=${encodeURIComponent(
         after
-      )}`;
+      )}`;  
 
       console.log("[Auth] emailRedirectTo:", callback);
       console.log(

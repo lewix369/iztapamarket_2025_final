@@ -16,6 +16,7 @@ try {
 } catch (_) {}
 
 // ── Debug de fingerprints para detectar mezclas de ngrok/URLs ───────────────
+console.log("🔥 SERVER.MJS VERSION: WELCOME_EMAIL_FIX");
 const __fp = (v) => (v ? String(v).replace(/^https?:\/\//, "").slice(0, 28) : null);
 console.log("[env] DOTENV_CONFIG_PATH:", process.env.DOTENV_CONFIG_PATH || ".env");
 console.log("[env] MP webhook/backs:", {
@@ -30,8 +31,7 @@ import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import { createClient } from "@supabase/supabase-js"; // fetch global Node18+
-
-// Router del webhook (Mercado Pago)
+import nodemailer from "nodemailer";
 
 // 3) App base
 const app = express();
@@ -39,6 +39,16 @@ app.set("trust proxy", true); // 👈 importante para ngrok/https
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 app.use(cookieParser());
+
+app.get("/debug-email", (_req, res) => {
+  console.log("🔥 HIT /debug-email");
+  res.json({
+    ok: true,
+    where: "server.mjs",
+    version: "WELCOME_EMAIL_FIX",
+    hint: "Si ves esto en curl y en la consola, este es el server correcto",
+  });
+});
 
 // Log de arranque para confirmar token
 console.log(
@@ -67,6 +77,17 @@ const makeAbsolute = (u, base) => {
   // Caso "localhost:3001/xxx" sin slash inicial
   return `${safeBase}/${s}`;
 };
+
+// Base pública del FRONT (SPA). Siempre preferimos FRONTEND_URL
+// y NUNCA usamos PUBLIC_BASE_URL para evitar que apunte al backend.
+const FRONTEND_BASE = (
+  process.env.FRONTEND_URL ||
+  process.env.VITE_FRONTEND_URL ||
+  process.env.VITE_PUBLIC_BASE_URL ||
+  "http://localhost:5173"
+).replace(/\/+$/, "");
+
+console.log("[env] FRONTEND_BASE:", FRONTEND_BASE);
 
 // 4) Healthcheck y versiones
 app.get("/health", (_req, res) => res.status(200).json({ ok: true }));
@@ -113,8 +134,8 @@ async function sendMagicLink(email, redirectPath = "/mi-negocio") {
       console.warn("[Auth] ⚠️ Email vacío para magic link.");
       return;
     }
-    const base = (process.env.PUBLIC_BASE_URL || "http://localhost:5173").replace(/\/+$/, "");
-    const emailRedirectTo = `${base}/auth/callback?redirect=${encodeURIComponent(redirectPath)}`;
+    const emailRedirectTo =
+      `${FRONTEND_BASE}/auth/callback?redirect=${encodeURIComponent(redirectPath)}`;
     console.log("[Auth] Enviando magic link a:", email, "→", emailRedirectTo);
     const { error } = await supabaseAdmin.auth.signInWithOtp({
       email,
@@ -129,6 +150,206 @@ async function sendMagicLink(email, redirectPath = "/mi-negocio") {
     console.error("[Auth] ❌ Excepción enviando magic link:", e?.message || e);
   }
 }
+
+// --- Email de bienvenida (SMTP genérico, configurable por .env o MAIL_*) ---
+function createSmtpTransport() {
+  // 1) Leer primero SMTP_*, si no, caer a MAIL_* (Mailtrap)
+  const host =
+    process.env.SMTP_HOST ||
+    process.env.MAIL_HOST ||
+    null;
+
+  const port = Number(
+    process.env.SMTP_PORT ||
+    process.env.MAIL_PORT ||
+    587
+  );
+
+  const user =
+    process.env.SMTP_USER ||
+    process.env.MAIL_USER ||
+    null;
+
+  const pass =
+    process.env.SMTP_PASS ||
+    process.env.MAIL_PASS ||
+    null;
+
+  const secureEnv =
+    process.env.SMTP_SECURE ??
+    process.env.MAIL_SECURE ??
+    "false";
+
+  const secure =
+    secureEnv === "1" ||
+    secureEnv === "true" ||
+    secureEnv === true;
+
+  const from =
+    process.env.SMTP_FROM ||
+    process.env.MAIL_FROM ||
+    `"IztapaMarket" <no-reply@iztapamarket.com>`;
+
+  // 🔍 Debug explícito del entorno SMTP para detectar rápidamente problemas de .env
+  console.log("[Email][debug SMTP env]", {
+    host,
+    user,
+    hasPass: !!pass,
+    port,
+    secure,
+    from,
+  });
+
+  if (!host || !user || !pass) {
+    console.warn(
+      "[Email] ⚠️ SMTP incompleto. Falta host, user o pass. Revisa SMTP_HOST/USER/PASS o MAIL_HOST/USER/PASS en .env"
+    );
+    return null;
+  }
+
+  return nodemailer.createTransport({
+    host,
+    port,
+    secure,
+    auth: { user, pass },
+  });
+}
+
+/**
+ * POST /api/send-welcome-email
+ * Body esperado:
+ * {
+ *   "to": "correo@cliente.com",
+ *   "subject"?: "Bienvenido a IztapaMarket",
+ *   "html"?: "<h1>...</h1>",
+ *   "businessName"?: "Taquería El Gordo",
+ *   "businessSlug"?: "taqueria-el-gordo",
+ *   "planType"?: "free" | "pro" | "premium",
+ *   "ownerName"?: "Nombre del dueño"
+ * }
+ */
+app.post("/api/send-welcome-email", async (req, res) => {
+  try {
+    const {
+      to,
+      subject,
+      html,
+      businessName,
+      businessSlug,
+      planType,
+      ownerName,
+    } = req.body || {};
+
+    console.log("[Email] HIT /api/send-welcome-email", {
+      body: req.body,
+      hasSMTP_HOST: !!process.env.SMTP_HOST,
+      hasSMTP_USER: !!process.env.SMTP_USER,
+    });
+    // Extra debug log del estado de las envs en runtime
+    console.log("[Email] Estado SMTP en runtime", {
+      SMTP_HOST: process.env.SMTP_HOST,
+      SMTP_USER: process.env.SMTP_USER,
+      hasSMTP_PASS: !!process.env.SMTP_PASS,
+      SMTP_FROM: process.env.SMTP_FROM || null,
+    });
+
+    if (!to) {
+      return res.status(400).json({ ok: false, error: "Falta 'to' (correo destino)" });
+    }
+
+    const transport = createSmtpTransport();
+    if (!transport) {
+      return res.status(500).json({
+        ok: false,
+        error:
+          "SMTP no configurado. Define SMTP_HOST, SMTP_USER, SMTP_PASS (y opcionalmente SMTP_PORT/SMTP_SECURE).",
+      });
+    }
+
+    // URL de ficha: siempre al FRONT, nunca al backend
+    const fichaUrl =
+      businessSlug
+        ? `${FRONTEND_BASE}/negocio/${encodeURIComponent(businessSlug)}`
+        : `${FRONTEND_BASE}/mi-negocio`;
+
+    const normalizedPlan = (planType || "free").toString().toLowerCase();
+    const planLabel =
+      normalizedPlan === "premium"
+        ? "Plan Premium"
+        : normalizedPlan === "pro"
+        ? "Plan Pro"
+        : "Plan Gratuito";
+
+    const saludo =
+      ownerName && typeof ownerName === "string"
+        ? `Hola ${ownerName.trim()},`
+        : "Hola,";
+
+    const finalSubject = subject || "Bienvenido a IztapaMarket 🚀";
+
+    const finalHtml =
+      html ||
+      `
+        <div style="font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; line-height: 1.6; padding: 12px 0;">
+          <p style="margin:0 0 12px 0;">${saludo}</p>
+          <h1 style="color:#0f172a;margin:0 0 8px 0;">¡Bienvenido a IztapaMarket!</h1>
+          <p style="margin:0 0 4px 0;">
+            ${
+              businessName
+                ? `Tu negocio <strong>${businessName}</strong> ya está listo para despegar.`
+                : "Tu negocio ya está listo para despegar."
+            }
+          </p>
+          <p style="margin:0 0 16px 0;">
+            <span style="display:inline-block;padding:4px 10px;border-radius:999px;background:#e5f2ff;color:#0369a1;font-size:12px;font-weight:600;">
+              ${planLabel}
+            </span>
+          </p>
+
+          <p style="margin:0 0 18px 0;">
+            Puedes revisar y editar tu ficha en cualquier momento desde este enlace:
+          </p>
+
+          <p style="margin:0 0 22px 0;">
+            <a href="${fichaUrl}"
+               style="display:inline-block;padding:10px 18px;background:#f97316;color:#ffffff;text-decoration:none;border-radius:999px;font-weight:600;">
+              Ver mi negocio en IztapaMarket
+            </a>
+          </p>
+
+          <p style="margin:0 0 10px 0;font-size:13px;color:#6b7280;">
+            Si el botón no funciona, copia y pega este enlace en tu navegador:<br/>
+            <span style="word-break:break-all;">${fichaUrl}</span>
+          </p>
+
+          <hr style="border:none;border-top:1px solid #e5e7eb;margin:18px 0;"/>
+
+          <p style="margin:0;font-size:12px;color:#9ca3af;">
+            Estás recibiendo este correo porque registraste un negocio en IztapaMarket.
+            Si no reconoces este registro, simplemente ignora este mensaje.
+          </p>
+        </div>
+      `;
+
+    const mailOptions = {
+      from:
+        process.env.SMTP_FROM ||
+        process.env.MAIL_FROM ||
+        `"IztapaMarket" <no-reply@iztapamarket.com>`,
+      to,
+      subject: finalSubject,
+      html: finalHtml,
+    };
+
+    console.log("[Email] Enviando welcome email a:", to, "→", fichaUrl);
+    await transport.sendMail(mailOptions);
+
+    return res.status(200).json({ ok: true });
+  } catch (e) {
+    console.error("[Email] ❌ Error enviando welcome email:", e?.message || e);
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
 
 // === RUTAS DE DIAGNÓSTICO ====================================================
 function mpEnv() {
@@ -574,9 +795,8 @@ console.log(
 );
 app.get(["/pago/success", "/pago/failure", "/pago/pending"], async (req, res) => {
   try {
-    const FRONTEND = (process.env.FRONTEND_URL || "http://localhost:5173").replace(/\/+$/, "");
     const target = req.path || "/";
-    const url = new URL(FRONTEND + target);
+    const url = new URL(FRONTEND_BASE + target);
 
     // Preserva todos los query params que llegan de MP
     Object.entries(req.query || {}).forEach(([k, v]) =>
@@ -688,12 +908,15 @@ app.get("/__routes", (_req, res) => {
           { path: "/pago/pending", methods: ["GET"] },
           { path: "/webhook_mp", methods: ["POST"] },
           { path: "/api/webhook_mp", methods: ["POST"] },
+          { path: "/api/send-welcome-email", methods: ["POST"] },
           { path: "/__routes", methods: ["GET"] },
         ],
       });
     }
 
     walkStack(rootStack, "");
+    // Aseguramos que /api/send-welcome-email siempre aparezca listado
+    pushRoute("/api/send-welcome-email", ["POST"]);
     return res.json({ ok: true, total: routes.length, routes });
   } catch (e) {
     return res.status(200).json({
@@ -712,6 +935,7 @@ app.get("/__routes", (_req, res) => {
         { path: "/webhook_mp/__writeprobe", methods: ["POST"] },
         { path: "/api/webhook_mp/__writeprobe", methods: ["POST"] },
         { path: "/api/create_preference", methods: ["POST"] },
+        { path: "/api/send-welcome-email", methods: ["POST"] },
         { path: "/mp/create", methods: ["POST"] },
         { path: "/mp/preference/:id", methods: ["GET"] },
       ],
