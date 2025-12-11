@@ -558,11 +558,12 @@ export default function PaySuccess() {
     }
 
     async function run() {
-      // ✅ Condición ampliada:
-      // - Caso normal: verificación real "approved"
-      // - Fallback: verificación con error PERO la URL viene approved/success
+      // ✅ NUEVO canProceed:
+      // - approved real
+      // - o URL approved aunque verificación sea error o failed (caso producción)
       const canProceed =
-        verified === "approved" || (verified === "error" && urlApproved);
+        verified === "approved" ||
+        (urlApproved && (verified === "error" || verified === "failed"));
 
       if (!canProceed) return;
 
@@ -601,9 +602,9 @@ export default function PaySuccess() {
 
       try {
         setRegMsg(
-          verified === "error"
-            ? "Pago aprobado por URL. Activando tu plan…"
-            : "Pago confirmado. Activando plan en tu cuenta…"
+          verified === "approved"
+            ? "Pago confirmado. Activando plan en tu cuenta…"
+            : "Pago aprobado por URL. Activando tu plan…"
         );
         await upsertProfileAndRedirect({
           plan: planDetected === "premium" ? "premium" : "pro",
@@ -642,7 +643,9 @@ export default function PaySuccess() {
     : verified === "pending"
     ? "Pago en proceso"
     : verified === "failed"
-    ? "No pudimos confirmar tu pago"
+    ? urlApproved
+      ? "Pago aprobado (validación parcial)"
+      : "No pudimos confirmar tu pago"
     : verified === "error"
     ? urlApproved
       ? "Pago aprobado (validación parcial)"
@@ -650,7 +653,9 @@ export default function PaySuccess() {
     : "Verificando pago…";
 
   const headerColor =
-    isFree || verified === "approved" || (verified === "error" && urlApproved)
+    isFree ||
+    verified === "approved" ||
+    (urlApproved && (verified === "error" || verified === "failed"))
       ? "text-green-600"
       : verified === "pending"
       ? "text-amber-600"
@@ -679,9 +684,11 @@ export default function PaySuccess() {
           ? "Tu pago se registró correctamente."
           : verified === "pending"
           ? "Recibimos la redirección y tu pago está en proceso. Si ya se te cargó, se reflejará en breve."
-          : verified === "failed"
+          : verified === "failed" && !urlApproved
           ? "Recibimos la redirección, pero tu pago no aparece aprobado. Si ya se te cargó, se reflejará en unos minutos."
           : verified === "error" && urlApproved
+          ? "Detectamos que la URL viene como aprobada. Tu plan se activará con validación parcial."
+          : verified === "failed" && urlApproved
           ? "Detectamos que la URL viene como aprobada. Tu plan se activará con validación parcial."
           : verified === "error"
           ? "Ocurrió un problema al validar el pago. Intenta más tarde o contáctanos."
