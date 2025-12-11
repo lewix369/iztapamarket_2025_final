@@ -90,7 +90,19 @@ const FRONTEND_BASE = (
 console.log("[env] FRONTEND_BASE:", FRONTEND_BASE);
 
 // 4) Healthcheck y versiones
-app.get("/health", (_req, res) => res.status(200).json({ ok: true }));
+const statusHandler = (_req, res) => {
+  res.status(200).json({
+    ok: true,
+    service: "iztapamarket-backend",
+    env: process.env.NODE_ENV || "sandbox",
+    version: process.env.APP_VERSION || "dev",
+    ts: new Date().toISOString(),
+  });
+};
+
+app.get("/", statusHandler);           // para Render (health check por defecto)
+app.get("/health", statusHandler);     // compat viejo
+app.get("/api/status", statusHandler); // para iztapamarket.com/api/status
 
 app.get("/diag/version", (_req, res) => {
   res.json({
@@ -1008,6 +1020,6 @@ app.use((req, res) => res.status(404).json({ ok: false, error: "Not Found" }));
 
 // 13) Arranque
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () =>
-  console.log(`🟢 Backend activo en: http://localhost:${PORT}`)
+app.listen(PORT, "0.0.0.0", () =>
+  console.log(`🟢 Backend activo en puerto: ${PORT}`)
 );
