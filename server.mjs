@@ -577,6 +577,10 @@ const createPreferenceHandler = async (req, res) => {
       items: [
         {
           title: resolvedTitle,
+          description:
+            planNorm === "pro"
+              ? "Suscripción mensual Plan Pro – IztapaMarket. Acceso a publicación de negocio, mayor visibilidad y herramientas profesionales."
+              : "Suscripción mensual Plan Premium – IztapaMarket. Máxima visibilidad, posicionamiento destacado y beneficios avanzados.",
           unit_price: Number(resolvedPrice),
           quantity: Number(quantity),
           currency_id,
