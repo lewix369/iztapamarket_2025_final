@@ -893,9 +893,11 @@ try {
 }
 
 // 8) Self-tests para webhook / Supabase (server-level, nunca 404)
-// ⚠️ Importante: deben declararse ANTES de montar el router /webhook_mp,
-// porque si no el router puede responder "unauthorized" y nunca llegar aquí.
-app.get(["/webhook_mp/__selftest", "/api/webhook_mp/__selftest"], async (_req, res) => {
+// ⚠️ Importante: se montan como un router de bypass ANTES del router protegido,
+// para garantizar que NUNCA pasen por la lógica de auth del webhook.
+const webhookBypassRouter = express.Router();
+
+webhookBypassRouter.get(["/__selftest"], async (_req, res) => {
   try {
     const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || null;
     const hasSRK = !!process.env.SUPABASE_SERVICE_ROLE || !!process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -922,7 +924,7 @@ app.get(["/webhook_mp/__selftest", "/api/webhook_mp/__selftest"], async (_req, r
 
     return res.status(200).json({
       ok: true,
-      via: "server-proxy",
+      via: "server-bypass-router",
       mp: { hasAccessToken: !!process.env.MP_ACCESS_TOKEN },
       supabase: {
         url,
@@ -941,11 +943,11 @@ app.get(["/webhook_mp/__selftest", "/api/webhook_mp/__selftest"], async (_req, r
   } catch (e) {
     return res
       .status(200)
-      .json({ ok: false, via: "server-proxy", error: String(e?.message || e) });
+      .json({ ok: false, via: "server-bypass-router", error: String(e?.message || e) });
   }
 });
 
-app.post(["/webhook_mp/__writeprobe", "/api/webhook_mp/__writeprobe"], async (_req, res) => {
+webhookBypassRouter.post(["/__writeprobe"], async (_req, res) => {
   try {
     if (!supabaseAdmin) return res.status(200).json({ ok: false, reason: "no_admin_client" });
     const payload = {
@@ -960,14 +962,22 @@ app.post(["/webhook_mp/__writeprobe", "/api/webhook_mp/__writeprobe"], async (_r
   }
 });
 
+// Montar bypass ANTES del router protegido (garantiza que no haya unauthorized aquí)
+app.use("/webhook_mp", webhookBypassRouter);
+app.use("/api/webhook_mp", webhookBypassRouter);
+
 // 9) Webhook Mercado Pago
 const { default: webhookMpRouter } = await import("./src/lib/api/routes/webhook_mp.mjs");
 
 const webhookGuard = (req, res, next) => {
   const p = String(req.path || "");
-  // Deja pasar endpoints server-level (diagnóstico / write-probe) sin tocar el router
-  if (p.startsWith("/__selftest") || p.startsWith("/__writeprobe") || p.startsWith("/__env") || p.startsWith("/__version")) {
+  // __env y __version siguen pasando (son del router/diagnóstico); __selftest y __writeprobe los atiende el bypass.
+  if (p.startsWith("/__env") || p.startsWith("/__version")) {
     return next();
+  }
+  // Si por alguna razón llega aquí /__selftest o /__writeprobe, no lo procesamos en el router protegido.
+  if (p.startsWith("/__selftest") || p.startsWith("/__writeprobe")) {
+    return res.status(404).json({ ok: false, error: "bypass_expected" });
   }
   return webhookMpRouter(req, res, next);
 };
