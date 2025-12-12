@@ -892,15 +892,93 @@ try {
   console.warn("[env] Supabase env normalization failed:", e?.message || e);
 }
 
-// 8) Webhook Mercado Pago
-const { default: webhookMpRouter } = await import("./src/lib/api/routes/webhook_mp.mjs");
-app.use("/webhook_mp", webhookMpRouter);
-app.use("/api/webhook_mp", webhookMpRouter);
+// 8) Self-tests para webhook / Supabase (server-level, nunca 404)
+// ⚠️ Importante: deben declararse ANTES de montar el router /webhook_mp,
+// porque si no el router puede responder "unauthorized" y nunca llegar aquí.
+app.get(["/webhook_mp/__selftest", "/api/webhook_mp/__selftest"], async (_req, res) => {
+  try {
+    const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || null;
+    const hasSRK = !!process.env.SUPABASE_SERVICE_ROLE || !!process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-// 9) Alias de /diag
+    let headOk = null;
+    let headErr = null;
+    let count = null;
+
+    if (supabaseAdmin) {
+      const { error, count: c } = await supabaseAdmin
+        .from("profiles")
+        .select("*", { head: true, count: "estimated" });
+      headOk = !error;
+      headErr = error ? (error.message || String(error)) : null;
+      count = typeof c === "number" ? c : null;
+    }
+
+    const mask = (s) => {
+      if (!s) return null;
+      const v = String(s);
+      if (v.length <= 12) return v;
+      return `${v.slice(0, 6)}…${v.slice(-6)}`;
+    };
+
+    return res.status(200).json({
+      ok: true,
+      via: "server-proxy",
+      mp: { hasAccessToken: !!process.env.MP_ACCESS_TOKEN },
+      supabase: {
+        url,
+        hasServiceRole: hasSRK,
+        adminReady: !!supabaseAdmin,
+        headOk,
+        count,
+        error: headErr,
+        keyMask: mask(
+          process.env.SUPABASE_SERVICE_ROLE ||
+            process.env.SUPABASE_SERVICE_ROLE_KEY ||
+            ""
+        ),
+      },
+    });
+  } catch (e) {
+    return res
+      .status(200)
+      .json({ ok: false, via: "server-proxy", error: String(e?.message || e) });
+  }
+});
+
+app.post(["/webhook_mp/__writeprobe", "/api/webhook_mp/__writeprobe"], async (_req, res) => {
+  try {
+    if (!supabaseAdmin) return res.status(200).json({ ok: false, reason: "no_admin_client" });
+    const payload = {
+      topic: "probe",
+      payload: { ts: new Date().toISOString(), from: "server.__writeprobe" },
+    };
+    const { error } = await supabaseAdmin.from("mp_notifications").insert([payload]);
+    if (error) return res.status(200).json({ ok: false, error: error.message, code: error.code });
+    return res.status(200).json({ ok: true });
+  } catch (e) {
+    return res.status(200).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+// 9) Webhook Mercado Pago
+const { default: webhookMpRouter } = await import("./src/lib/api/routes/webhook_mp.mjs");
+
+const webhookGuard = (req, res, next) => {
+  const p = String(req.path || "");
+  // Deja pasar endpoints server-level (diagnóstico / write-probe) sin tocar el router
+  if (p.startsWith("/__selftest") || p.startsWith("/__writeprobe") || p.startsWith("/__env") || p.startsWith("/__version")) {
+    return next();
+  }
+  return webhookMpRouter(req, res, next);
+};
+
+app.use("/webhook_mp", webhookGuard);
+app.use("/api/webhook_mp", webhookGuard);
+
+// 10) Alias de /diag
 app.get("/diag", (_req, res) => res.redirect(307, "/api/diag"));
 
-// 10) Post-pago → front
+// 11) Post-pago → front
 console.log(
   "➡️  Postpay redirect routes mounted: /pago/success, /pago/failure, /pago/pending"
 );
@@ -945,7 +1023,7 @@ app.get(["/pago/success", "/pago/failure", "/pago/pending"], async (req, res) =>
   }
 });
 
-// 11) 🔎 /__routes ultra robusto
+// 12) 🔎 /__routes ultra robusto
 app.get("/__routes", (_req, res) => {
   try {
     const seen = new Set();
@@ -1054,71 +1132,11 @@ app.get("/__routes", (_req, res) => {
   }
 });
 
-// 11.5) Self-tests para webhook / Supabase (server-level, nunca 404)
-app.get(["/webhook_mp/__selftest", "/api/webhook_mp/__selftest"], async (_req, res) => {
-  try {
-    const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || null;
-    const hasSRK = !!process.env.SUPABASE_SERVICE_ROLE || !!process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-    let headOk = null;
-    let headErr = null;
-    let count = null;
-
-    if (supabaseAdmin) {
-      const { error, count: c } = await supabaseAdmin
-        .from("profiles")
-        .select("*", { head: true, count: "estimated" });
-      headOk = !error;
-      headErr = error ? (error.message || String(error)) : null;
-      count = typeof c === "number" ? c : null;
-    }
-
-    const mask = (s) => {
-      if (!s) return null;
-      const v = String(s);
-      if (v.length <= 12) return v;
-      return `${v.slice(0, 6)}…${v.slice(-6)}`;
-    };
-
-    return res.status(200).json({
-      ok: true,
-      via: "server-proxy",
-      mp: { hasAccessToken: !!process.env.MP_ACCESS_TOKEN },
-      supabase: {
-        url,
-        hasServiceRole: hasSRK,
-        adminReady: !!supabaseAdmin,
-        headOk,
-        count,
-        error: headErr,
-        keyMask: mask(process.env.SUPABASE_SERVICE_ROLE || process.env.SUPABASE_SERVICE_ROLE_KEY || "")
-      }
-    });
-  } catch (e) {
-    return res.status(200).json({ ok: false, via: "server-proxy", error: String(e?.message || e) });
-  }
-});
-
-app.post(["/webhook_mp/__writeprobe", "/api/webhook_mp/__writeprobe"], async (_req, res) => {
-  try {
-    if (!supabaseAdmin) return res.status(200).json({ ok: false, reason: "no_admin_client" });
-    const payload = {
-      topic: "probe",
-      payload: { ts: new Date().toISOString(), from: "server.__writeprobe" }
-    };
-    const { error } = await supabaseAdmin.from("mp_notifications").insert([payload]);
-    if (error) return res.status(200).json({ ok: false, error: error.message, code: error.code });
-    return res.status(200).json({ ok: true });
-  } catch (e) {
-    return res.status(200).json({ ok: false, error: String(e?.message || e) });
-  }
-});
-
-// 12) 404
+// 13) 404
 app.use((req, res) => res.status(404).json({ ok: false, error: "Not Found" }));
 
-// 13) Arranque
+// 14) Arranque
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, "0.0.0.0", () =>
   console.log(`🟢 Backend activo en puerto: ${PORT}`)
-); 
+);  
