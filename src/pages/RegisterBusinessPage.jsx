@@ -207,7 +207,10 @@ const RegisterBusinessPage = () => {
       .trim()
       .toLowerCase()
   );
-  const sessionEmail = (authUser?.email || "").toString().trim().toLowerCase();
+  const sessionEmail = (authUser?.email || "")
+    .toString()
+    .trim()
+    .toLowerCase();
   const emailMismatch = Boolean(
     intendedEmail && sessionEmail && intendedEmail !== sessionEmail
   );
@@ -336,6 +339,15 @@ const RegisterBusinessPage = () => {
     isPaid &&
     !authUser;
 
+  // Solo mostramos el formulario cuando:
+  // - FREE: siempre
+  // - PRO/PREMIUM: pago aprobado + (no se exige login) o ya hay sesión
+  const canShowForm =
+    selectedPlan === "free" ||
+    ((selectedPlan === "pro" || selectedPlan === "premium") &&
+      isPaid &&
+      (!REQUIRE_LOGIN_AFTER_PAYMENT || !!authUser));
+
   const goLoginToFinish = () => {
     // Siempre regresamos a la misma URL (incluyendo ?plan=...&paid=...)
     const dest = `${location.pathname}${location.search || ""}`;
@@ -393,7 +405,7 @@ const RegisterBusinessPage = () => {
       }
     };
     run();
-  }, [authUser, isPaid, selectedPlan]);
+  }, [authUser, isPaid, selectedPlan, formData.email, emailFromUrl, navigate]);
 
   useEffect(() => {
     if (
@@ -1114,8 +1126,7 @@ const RegisterBusinessPage = () => {
         </div>
       )}
 
-      {(((selectedPlan === "pro" || selectedPlan === "premium") && isPaid) ||
-        selectedPlan === "free") && (
+      {canShowForm && (
         <form
           onSubmit={handleSubmit}
           className="max-w-2xl mx-auto space-y-6 bg-white p-6 shadow rounded-lg"

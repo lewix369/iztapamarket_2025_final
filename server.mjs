@@ -37,7 +37,20 @@ import nodemailer from "nodemailer";
 const app = express();
 app.set("trust proxy", true); // 👈 importante para ngrok/https
 app.use(cors({ origin: true, credentials: true }));
-app.use(express.json());
+// Captura raw body (sin romper express.json) para debug y fallback si algún proxy entrega el body raro
+app.use(
+  express.json({
+    type: ["application/json", "application/*+json"],
+    limit: "1mb",
+    verify: (req, _res, buf) => {
+      try {
+        req.rawBody = buf?.toString("utf8");
+      } catch {
+        req.rawBody = null;
+      }
+    },
+  })
+);
 app.use(cookieParser());
 
 app.get("/debug-email", (_req, res) => {
@@ -100,9 +113,10 @@ const statusHandler = (_req, res) => {
   });
 };
 
-app.get("/", statusHandler);           // para Render (health check por defecto)
-app.get("/health", statusHandler);     // compat viejo
-app.get("/api/status", statusHandler); // para iztapamarket.com/api/status
+app.get("/", statusHandler);            // para Render (health check por defecto)
+app.get("/health", statusHandler);      // compat viejo
+app.get("/api/health", statusHandler);  // 👈 compat para checks que llaman /api/health
+app.get("/api/status", statusHandler);  // para iztapamarket.com/api/status
 
 app.get("/diag/version", (_req, res) => {
   res.json({
@@ -397,19 +411,68 @@ app.get(["/api/webhook_mp/__env", "/webhook_mp/__env"], (_req, res) => {
 // 6) Crear preferencia de Mercado Pago
 const createPreferenceHandler = async (req, res) => {
   try {
+    let body = req.body || {};
+
+    // Si por alguna razón llegó vacío (proxy/edge), intenta parsear el raw body
+    if (
+      (!body || (typeof body === "object" && Object.keys(body).length === 0)) &&
+      req.rawBody &&
+      typeof req.rawBody === "string" &&
+      req.rawBody.trim().startsWith("{")
+    ) {
+      try {
+        body = JSON.parse(req.rawBody);
+        console.warn("[MP] ⚠️ req.body llegó vacío; usando JSON.parse(req.rawBody)");
+      } catch (e) {
+        console.warn("[MP] ⚠️ No se pudo parsear req.rawBody como JSON:", e?.message || e);
+      }
+    }
+
+    // Debug mínimo y seguro (sin imprimir tokens)
+    console.log("[MP] create_preference_v2 inbound", {
+      contentType: req.headers["content-type"],
+      contentLength: req.headers["content-length"],
+      hasBodyKeys: body && typeof body === "object" ? Object.keys(body).length : null,
+      rawBodyPreview: req.rawBody ? String(req.rawBody).slice(0, 120) : null,
+    });
+
+    // Soporte para el contrato del frontend: { email, plan, userId }
+    const plan = String(body.plan || body.plan_type || body.planType || "").toLowerCase().trim();
+    const emailFromBody = String(body.email || body.payer_email || body.contact_email || "").trim();
+    const userIdFromBody = body.userId ?? body.user_id ?? body.user_id_supabase ?? null;
+
+    console.log("[MP] parsed input", { plan, emailFromBody: emailFromBody ? "SET" : "MISSING" });
+
+    // Precios por plan (puedes sobreescribir por ENV si quieres)
+    const PRICE_PRO = Number(process.env.MP_PRICE_PRO || 50);
+    const PRICE_PREMIUM = Number(process.env.MP_PRICE_PREMIUM || 199);
+
+    // ✅ En producción NO dejamos que el cliente (frontend) overridee title/price.
+    // Esto evita bugs tipo: mandas plan=pro y termina cobrando premium.
+    const planNorm = plan === "pro" ? "pro" : plan === "premium" ? "premium" : "";
+    if (!planNorm) {
+      return res.status(400).json({
+        error: "Plan inválido",
+        received: plan,
+        allowed: ["pro", "premium"],
+      });
+    }
+
+    const resolvedTitle = planNorm === "pro" ? "Plan Pro" : "Plan Premium";
+    const resolvedPrice = planNorm === "pro" ? PRICE_PRO : PRICE_PREMIUM;
+
     const {
-      title = "Plan Premium",
-      price = 199,
       quantity = 1,
       currency_id = "MXN",
       external_reference,
       notification_url: notificationUrlFromBody,
       back_urls: backUrlsFromBody, // permitir override desde el body
       metadata,
-    } = req.body || {};
+    } = body;
 
-    const payer_email = req.body?.payer_email;
-    const binary_mode = Boolean(req.body?.binary_mode);
+    // Si viene email, úsalo como payer_email
+    const payer_email = emailFromBody || body.payer_email;
+    const binary_mode = Boolean(body.binary_mode);
 
     const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
 
@@ -495,7 +558,12 @@ const createPreferenceHandler = async (req, res) => {
 
     const payload = {
       items: [
-        { title, unit_price: Number(price), quantity: Number(quantity), currency_id },
+        {
+          title: resolvedTitle,
+          unit_price: Number(resolvedPrice),
+          quantity: Number(quantity),
+          currency_id,
+        },
       ],
       back_urls: BACK_URLS_ABS,
       ...(autoReturn ? { auto_return: autoReturn } : {}),
@@ -503,7 +571,12 @@ const createPreferenceHandler = async (req, res) => {
       binary_mode,
       notification_url: makeAbsolute(NOTIF_URL, BASE_URL),
       external_reference: external_reference || undefined,
-      metadata: metadata || undefined,
+      metadata: {
+        ...(metadata && typeof metadata === "object" ? metadata : {}),
+        plan: planNorm || undefined,
+        userId: userIdFromBody || undefined,
+        email: payer_email || undefined,
+      },
     };
 
     console.log("[MP payload]", JSON.stringify(payload, null, 2));
@@ -1022,4 +1095,4 @@ app.use((req, res) => res.status(404).json({ ok: false, error: "Not Found" }));
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, "0.0.0.0", () =>
   console.log(`🟢 Backend activo en puerto: ${PORT}`)
-);
+); 
