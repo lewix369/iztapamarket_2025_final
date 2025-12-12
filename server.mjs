@@ -17,6 +17,14 @@ try {
 
 // ── Debug de fingerprints para detectar mezclas de ngrok/URLs ───────────────
 console.log("🔥 SERVER.MJS VERSION: WELCOME_EMAIL_FIX");
+// 🔎 Build fingerprint (para confirmar qué commit está corriendo en Render)
+const BUILD_SHA =
+  process.env.RENDER_GIT_COMMIT ||
+  process.env.GIT_COMMIT ||
+  process.env.VERCEL_GIT_COMMIT_SHA ||
+  process.env.COMMIT_REF ||
+  "local";
+console.log("[build] sha:", BUILD_SHA);
 const __fp = (v) => (v ? String(v).replace(/^https?:\/\//, "").slice(0, 28) : null);
 console.log("[env] DOTENV_CONFIG_PATH:", process.env.DOTENV_CONFIG_PATH || ".env");
 console.log("[env] MP webhook/backs:", {
@@ -59,6 +67,7 @@ app.get("/debug-email", (_req, res) => {
     ok: true,
     where: "server.mjs",
     version: "WELCOME_EMAIL_FIX",
+    build: BUILD_SHA,
     hint: "Si ves esto en curl y en la consola, este es el server correcto",
   });
 });
@@ -109,6 +118,7 @@ const statusHandler = (_req, res) => {
     service: "iztapamarket-backend",
     env: process.env.NODE_ENV || "sandbox",
     version: process.env.APP_VERSION || "dev",
+    build: BUILD_SHA,
     ts: new Date().toISOString(),
   });
 };
@@ -123,6 +133,7 @@ app.get("/diag/version", (_req, res) => {
     env: process.env.NODE_ENV || "sandbox",
     ok: true,
     version: process.env.APP_VERSION || "dev",
+    build: BUILD_SHA,
   });
 });
 
@@ -460,6 +471,7 @@ const createPreferenceHandler = async (req, res) => {
 
     const resolvedTitle = planNorm === "pro" ? "Plan Pro" : "Plan Premium";
     const resolvedPrice = planNorm === "pro" ? PRICE_PRO : PRICE_PREMIUM;
+    console.log("[MP] resolved", { plan: planNorm, resolvedTitle, resolvedPrice });
 
     const {
       quantity = 1,
