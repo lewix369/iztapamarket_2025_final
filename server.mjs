@@ -472,6 +472,11 @@ const createPreferenceHandler = async (req, res) => {
     const resolvedTitle = planNorm === "pro" ? "Plan Pro" : "Plan Premium";
     const resolvedPrice = planNorm === "pro" ? PRICE_PRO : PRICE_PREMIUM;
     console.log("[MP] resolved", { plan: planNorm, resolvedTitle, resolvedPrice });
+    // 🔎 Fingerprint por-request para detectar instancias mezcladas en Render
+    res.setHeader("x-iztapa-build", BUILD_SHA);
+    res.setHeader("x-iztapa-plan", planNorm);
+    res.setHeader("x-iztapa-title", resolvedTitle);
+    res.setHeader("x-iztapa-price", String(resolvedPrice));
 
     const {
       quantity = 1,
@@ -645,7 +650,16 @@ const createPreferenceHandler = async (req, res) => {
       }
     }
 
-    return res.status(200).json(data);
+    // Adjuntamos fingerprint al JSON para debug (no expone secretos)
+    const withDebug = {
+      ...data,
+      _server: {
+        build: BUILD_SHA,
+        resolved: { plan: planNorm, title: resolvedTitle, price: resolvedPrice },
+      },
+    };
+
+    return res.status(200).json(withDebug);
   } catch (err) {
     console.error("[/api/create_preference] Exception:", err?.message || err);
     return res.status(500).json({ error: "Fallo al crear preferencia" });
