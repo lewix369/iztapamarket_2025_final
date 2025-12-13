@@ -10,7 +10,6 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Upload } from "lucide-react";
 import { mapPromo } from "@/utils/mapPromo";
-import { getSessionAndProfile } from "@/lib/useUserProfile";
 import BusinessForm from "@/components/admin/BusinessForm";
 
 /* =========================
@@ -124,39 +123,60 @@ const MiNegocioPage = () => {
   
   const navigate = useNavigate();
     // === Plan del usuario (no rompe flujos existentes) ===
+  // === Plan del usuario (no rompe flujos existentes) ===
+  // Nota: evitamos `plan_status` porque tu tabla `profiles` no tiene esa columna.
   const [sessEmail, setSessEmail] = useState(null);
   const [plan, setPlan] = useState({ type: null, status: null, expiresAt: null });
   const [loadingPlan, setLoadingPlan] = useState(true);
 
   useEffect(() => {
     let alive = true;
+
     (async () => {
       try {
-        const { user, profile, needsLogin, error } = await getSessionAndProfile("auto");
+        const { data: sessionData, error: sessErr } = await supabase.auth.getSession();
         if (!alive) return;
+        if (sessErr) console.warn("[MiNegocioPage] session warning:", sessErr);
 
-        if (needsLogin || !user?.email) {
+        const session = sessionData?.session || null;
+        const user = session?.user || null;
+
+        if (!user?.id) {
           setSessEmail(null);
           setPlan({ type: null, status: null, expiresAt: null });
-          setLoadingPlan(false);
           return;
         }
 
         setSessEmail(user.email ?? null);
-        setPlan({
-          type: profile?.plan_type ?? null,
-          status: profile?.plan_status ?? null,
-          expiresAt: profile?.plan_expires_at ?? null,
-        });
 
-        if (error) console.warn("[MiNegocioPage] perfil warning:", error);
+        // Cargar plan desde `profiles` usando solo columnas seguras
+        const { data: prof, error: profErr } = await supabase
+          .from("profiles")
+          .select("plan_type, plan_expires_at")
+          .eq("id", user.id)
+          .maybeSingle();
+
+        if (profErr) {
+          console.warn("[MiNegocioPage] perfil warning:", profErr);
+          setPlan({ type: null, status: null, expiresAt: null });
+          return;
+        }
+
+        setPlan({
+          type: prof?.plan_type ?? null,
+          status: null,
+          expiresAt: prof?.plan_expires_at ?? null,
+        });
       } catch (e) {
         console.error("[MiNegocioPage] perfil error:", e);
       } finally {
         if (alive) setLoadingPlan(false);
       }
     })();
-    return () => { alive = false; };
+
+    return () => {
+      alive = false;
+    };
   }, []);
 
   const SUPPORT_URL =
@@ -782,6 +802,35 @@ const MiNegocioPage = () => {
           // Solo el dueño de un plan Pro/Premium puede editar
           setCanEditBusiness(!!isPaidOwner);
 
+          // --- Normalizar negocio + coords si vienen solo en el embed ---
+          const extractedCoords = extractLatLngFromEmbed(negocio.mapa_embed_url || "");
+          const needsCoordsFix =
+            extractedCoords &&
+            (negocio.lat == null || negocio.lng == null) &&
+            (negocio.latitud == null || negocio.longitud == null);
+
+          // Si el negocio tiene mapa_embed_url pero no coords, las persistimos UNA sola vez
+          if (needsCoordsFix) {
+            try {
+              await supabase
+                .from("negocios")
+                .update({
+                  lat: extractedCoords.lat,
+                  lng: extractedCoords.lng,
+                  latitud: extractedCoords.lat,
+                  longitud: extractedCoords.lng,
+                })
+                .eq("id", negocio.id);
+
+              negocio.lat = extractedCoords.lat;
+              negocio.lng = extractedCoords.lng;
+              negocio.latitud = extractedCoords.lat;
+              negocio.longitud = extractedCoords.lng;
+            } catch (e) {
+              console.warn("[MiNegocio] No se pudieron normalizar coords desde embed", e);
+            }
+          }
+
           setBusiness({
             id: negocio.id,
             ...negocio,
@@ -1388,20 +1437,54 @@ const MiNegocioPage = () => {
   // Ubicación actual
   const handleSetCurrentLocation = () => {
     if (!ensureCanEdit()) return;
+    if (!business?.id) {
+      alert("No se encontró el ID del negocio.");
+      return;
+    }
     if (!navigator.geolocation) {
       alert("Tu navegador no soporta geolocalización.");
       return;
     }
+
     navigator.geolocation.getCurrentPosition(
       async (position) => {
         const { latitude, longitude } = position.coords;
         const embedUrl = `https://www.google.com/maps?q=${latitude},${longitude}&hl=es&z=14&output=embed`;
-        await supabase
-          .from("negocios")
-          .update({ mapa_embed_url: embedUrl })
-          .eq("id", business.id);
-        setBusiness({ ...business, mapa_embed_url: embedUrl });
-        alert("Ubicación actual guardada correctamente.");
+
+        try {
+          // ✅ Persistimos mapa + coords y verificamos que realmente se guardó en DB
+          const { data: updated, error } = await supabase
+            .from("negocios")
+            .update({
+              mapa_embed_url: embedUrl,
+              // Guardar coords para deep links (Uber/Waze/DiDi) y features "cerca de mí"
+              lat: latitude,
+              lng: longitude,
+              latitud: latitude,
+              longitud: longitude,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", business.id)
+            .select("mapa_embed_url, lat, lng, latitud, longitud")
+            .single();
+
+          if (error) throw error;
+
+          // Usar update funcional para evitar estado stale
+          setBusiness((prev) => ({
+            ...prev,
+            mapa_embed_url: updated?.mapa_embed_url || embedUrl,
+            lat: updated?.lat ?? latitude,
+            lng: updated?.lng ?? longitude,
+            latitud: updated?.latitud ?? latitude,
+            longitud: updated?.longitud ?? longitude,
+          }));
+
+          alert("Ubicación actual guardada correctamente.");
+        } catch (e) {
+          console.error("[MiNegocio] Error guardando ubicación:", e);
+          alert("No se pudo guardar la ubicación. Intenta de nuevo.");
+        }
       },
       (error) => {
         if (error.code === 1) {
@@ -1409,7 +1492,8 @@ const MiNegocioPage = () => {
         } else {
           alert("Error al obtener la ubicación.");
         }
-      }
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
     );
   };
 
@@ -1542,11 +1626,29 @@ const MiNegocioPage = () => {
   const handleClearMap = async () => {
     try {
       if (!ensureCanEdit()) return;
-      await supabase
+      const { data: cleared, error: clearErr } = await supabase
         .from("negocios")
-        .update({ mapa_embed_url: "" })
-        .eq("id", business.id);
-      setBusiness((prev) => ({ ...prev, mapa_embed_url: "" }));
+        .update({
+          mapa_embed_url: "",
+          lat: null,
+          lng: null,
+          latitud: null,
+          longitud: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", business.id)
+        .select("mapa_embed_url, lat, lng, latitud, longitud")
+        .single();
+      if (clearErr) throw clearErr;
+
+      setBusiness((prev) => ({
+        ...prev,
+        mapa_embed_url: cleared?.mapa_embed_url ?? "",
+        lat: cleared?.lat ?? null,
+        lng: cleared?.lng ?? null,
+        latitud: cleared?.latitud ?? null,
+        longitud: cleared?.longitud ?? null,
+      }));
       alert("Mapa eliminado.");
     } catch (e) {
       console.error("No se pudo eliminar el mapa:", e?.message || e);

@@ -140,7 +140,7 @@ const LightboxGallery = ({ images = [], title = "Galería" }) => {
                   width="800"
                   height="600"
                   loading={i < 2 ? "eager" : "lazy"}
-                  fetchPriority={i === 0 ? "high" : "auto"}
+                  fetchpriority={i === 0 ? "high" : "auto"}
                   decoding="async"
                   onError={(e) => (e.currentTarget.style.display = "none")}
                 />
@@ -170,7 +170,7 @@ const LightboxGallery = ({ images = [], title = "Galería" }) => {
                 width="640"
                 height="360"
                 loading={i < 2 ? "eager" : "lazy"}
-                fetchPriority={i === 0 ? "high" : "auto"}
+                fetchpriority={i === 0 ? "high" : "auto"}
                 decoding="async"
                 onError={(e) => (e.currentTarget.style.display = "none")}
               />
@@ -574,8 +574,8 @@ const BusinessDetailPage = () => {
       return decodeHtmlEntities(b.mapa_embed_url);
     }
 
-    const lat = Number(b.lat ?? b.latitude);
-    const lng = Number(b.lng ?? b.longitude);
+    const lat = Number(b.lat ?? b.latitud ?? b.latitude);
+    const lng = Number(b.lng ?? b.longitud ?? b.longitude);
     if (!Number.isNaN(lat) && !Number.isNaN(lng)) {
       return `https://maps.google.com/maps?q=${lat},${lng}&z=15&output=embed`;
     }
@@ -597,8 +597,8 @@ const BusinessDetailPage = () => {
   // Construye link "Cómo llegar" para abrir Google Maps
   const getDirectionsUrl = (b) => {
     if (!b) return null;
-    const lat = Number(b.lat ?? b.latitude);
-    const lng = Number(b.lng ?? b.longitude);
+    const lat = Number(b.lat ?? b.latitud ?? b.latitude);
+    const lng = Number(b.lng ?? b.longitud ?? b.longitude);
     if (!Number.isNaN(lat) && !Number.isNaN(lng)) {
       return `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`;
     }
@@ -623,8 +623,8 @@ const BusinessDetailPage = () => {
       if (!b) return { type: "query", value: "" };
 
       // 1) Campos directos en DB
-      const lat = Number(b?.lat ?? b?.latitude);
-      const lng = Number(b?.lng ?? b?.longitude);
+      const lat = Number(b?.lat ?? b?.latitud ?? b?.latitude);
+      const lng = Number(b?.lng ?? b?.longitud ?? b?.longitude);
       if (!Number.isNaN(lat) && !Number.isNaN(lng)) {
         return { type: "latlng", value: `${lat},${lng}`, lat, lng };
       }
@@ -1108,15 +1108,25 @@ const BusinessDetailPage = () => {
           const galleryLimit =
             plan === "premium" ? 6 : plan === "profesional" ? 3 : 0;
 
-          return (
+          const hasGallery =
             Array.isArray(business.gallery_images) &&
             business.gallery_images.length > 0 &&
-            galleryLimit > 0 && (
+            galleryLimit > 0;
+
+          if (!hasGallery) return null;
+
+          return (
+            <section className="mt-10">
+              <h2 className="text-2xl font-bold mb-2">📸 Galería</h2>
+              <p className="text-sm text-gray-500 mb-4">
+                Toca una imagen para verla en grande.
+              </p>
+
               <LightboxGallery
                 images={business.gallery_images.slice(0, galleryLimit)}
                 title={business.nombre}
               />
-            )
+            </section>
           );
         })()}
 

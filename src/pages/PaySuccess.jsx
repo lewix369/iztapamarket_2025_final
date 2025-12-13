@@ -22,6 +22,16 @@ export default function PaySuccess() {
   const external_reference = params.get("external_reference") || "";
 
   const urlApproved = url_status === "approved" || url_status === "success";
+  const urlLooksApproved = urlApproved;
+
+  // ✅ Permitir pruebas manuales SOLO en local/dev (evita bypass en producción)
+  const ALLOW_MANUAL_SUCCESS = useMemo(() => {
+    const flag = (import.meta.env.VITE_ALLOW_MANUAL_SUCCESS || "0").toString() === "1";
+    if (flag) return true;
+    if (typeof window === "undefined") return false;
+    const h = window.location.hostname;
+    return h === "localhost" || h === "127.0.0.1" || h.endsWith(".local");
+  }, []);
 
   // email|plan|tag desde external_reference (normaliza también el email a minúsculas)
   const [extEmail, extPlan] = useMemo(() => {
@@ -228,60 +238,82 @@ export default function PaySuccess() {
   );
 
   // 0.5) Si la URL ya vino con approved/success
-  // - Si NO hay referencias de MP => tratamos como prueba manual y forzamos aprobado
-  //   para que el flujo de registro se active.
-  // - Si SÍ hay referencias => dejamos todo al verificador real + upsert.
   useEffect(() => {
     if (isFree) return;
-    if (!urlApproved) return;
 
-    const rawPlan =
-      (planParam || extPlan || localStorage.getItem("reg_plan") || "pro").toLowerCase();
-    const planF = rawPlan.includes("premium") ? "premium" : rawPlan || "pro";
+    // Si no viene status approved/success, no hacemos nada
+    if (!urlLooksApproved) return;
 
-    const emailF = (
-      emailParam ||
-      extEmail ||
-      localStorage.getItem("reg_email") ||
-      ""
-    )
-      .toString()
-      .trim()
-      .toLowerCase();
-
-    // Caso 1: URL de prueba manual (sin referencias de MP)
+    // 🔒 Seguridad: si NO hay referencias reales de MP en la URL,
+    // NO debemos marcar como aprobado ni activar plan.
+    // Esto evita que alguien pegue /pago/success a mano y vea/active cosas.
     if (!hasAnyRef) {
-      const fakeTitle =
-        planF === "premium"
-          ? "Plan PREMIUM IztapaMarket"
-          : "Plan PRO IztapaMarket";
+      // Modo prueba manual: solo permitido en local/dev o con flag explícito
+      if (ALLOW_MANUAL_SUCCESS) {
+        const rawPlan = (planParam || extPlan || localStorage.getItem("reg_plan") || "pro")
+          .toString()
+          .toLowerCase();
+        const planF = rawPlan.includes("premium") ? "premium" : rawPlan || "pro";
 
-      const fake = {
-        status: "approved",
-        additional_info: {
-          items: [{ title: fakeTitle }],
+        const emailF = (emailParam || extEmail || localStorage.getItem("reg_email") || "")
+          .toString()
+          .trim()
+          .toLowerCase();
+
+        if (!emailF) {
+          setDetails(null);
+          setVerified("error");
+          setLoading(false);
+          setRegMsg("Falta el email en la URL. Agrega &email=... para continuar (modo prueba)." );
+          return;
+        }
+
+        // Guardamos para que /registro lo use
+        try {
+          localStorage.setItem("reg_email", emailF);
+          localStorage.setItem("reg_plan", planF);
+        } catch {}
+
+        // Detalles fake solo para UI
+        const fakeTitle = planF === "premium" ? "Plan PREMIUM IztapaMarket" : "Plan PRO IztapaMarket";
+        const fake = {
+          status: "approved",
+          additional_info: { items: [{ title: fakeTitle }], payer: { email: emailF } },
           payer: { email: emailF },
-        },
-        payer: { email: emailF },
-      };
+        };
 
-      setDetails(fake);
-      setVerified("approved");
+        setDetails(fake);
+        setVerified("approved");
+        setLoading(false);
+        setRegMsg("✅ Pago aprobado (modo prueba local). Redirigiendo al registro…");
+
+        const qs = new URLSearchParams({ plan: planF, email: emailF, paid: "approved" });
+        safeNavigate(`/registro?${qs.toString()}`);
+        return;
+      }
+
+      // 🔒 Producción: sin referencias reales NO se activa nada.
+      setDetails(null);
+      setVerified("error");
       setLoading(false);
-      // Dejamos que el efecto de upsert haga el redirect final a /registro.
+      setRegMsg(
+        "Esta URL no trae datos de pago (payment_id / merchant_order_id / preference_id). Si acabas de pagar, vuelve a intentar desde el botón de pago o espera el redireccionamiento de Mercado Pago."
+      );
       return;
     }
 
-    // Caso 2: hay referencias reales => no hacemos nada.
+    // Si SÍ hay referencias reales => no hacemos nada aquí.
     // El efecto de verificación + upsert se encargará.
   }, [
     isFree,
-    urlApproved,
+    urlLooksApproved,
+    hasAnyRef,
     planParam,
     extPlan,
     emailParam,
     extEmail,
-    hasAnyRef,
+    ALLOW_MANUAL_SUCCESS,
+    safeNavigate,
   ]);
 
   // 1) Verificación real con backend (polling corto)
@@ -458,7 +490,7 @@ export default function PaySuccess() {
     const email =
       (emailParam || extEmail || details?.payer?.email || "").toLowerCase();
 
-    const approved = urlApproved || verified === "approved";
+    const approved = verified === "approved" || (urlLooksApproved && hasAnyRef);
 
     if (!approved || !email) return;
 
@@ -492,6 +524,8 @@ export default function PaySuccess() {
     planParam,
     extPlan,
     navigate,
+    hasAnyRef,
+    urlLooksApproved,
   ]);
 
   // 2) Upsert en Supabase + redirección al formulario
@@ -573,10 +607,10 @@ export default function PaySuccess() {
     async function run() {
       // ✅ NUEVO canProceed:
       // - approved real
-      // - o URL approved aunque verificación sea error o failed (caso producción)
+      // - o URL approved + refs aunque verificación sea error o failed (caso producción)
       const canProceed =
         verified === "approved" ||
-        (urlApproved && (verified === "error" || verified === "failed"));
+        (hasAnyRef && urlLooksApproved && (verified === "error" || verified === "failed"));
 
       if (!canProceed) return;
 
@@ -656,11 +690,11 @@ export default function PaySuccess() {
     : verified === "pending"
     ? "Pago en proceso"
     : verified === "failed"
-    ? urlApproved
+    ? (urlLooksApproved && hasAnyRef)
       ? "Pago aprobado (validación parcial)"
       : "No pudimos confirmar tu pago"
     : verified === "error"
-    ? urlApproved
+    ? (urlLooksApproved && hasAnyRef)
       ? "Pago aprobado (validación parcial)"
       : "Error al verificar tu pago"
     : "Verificando pago…";
@@ -668,7 +702,7 @@ export default function PaySuccess() {
   const headerColor =
     isFree ||
     verified === "approved" ||
-    (urlApproved && (verified === "error" || verified === "failed"))
+    (hasAnyRef && urlLooksApproved && (verified === "error" || verified === "failed"))
       ? "text-green-600"
       : verified === "pending"
       ? "text-amber-600"
@@ -697,11 +731,11 @@ export default function PaySuccess() {
           ? "Tu pago se registró correctamente."
           : verified === "pending"
           ? "Recibimos la redirección y tu pago está en proceso. Si ya se te cargó, se reflejará en breve."
-          : verified === "failed" && !urlApproved
+          : verified === "failed" && !urlLooksApproved
           ? "Recibimos la redirección, pero tu pago no aparece aprobado. Si ya se te cargó, se reflejará en unos minutos."
-          : verified === "error" && urlApproved
+          : verified === "error" && urlLooksApproved && hasAnyRef
           ? "Detectamos que la URL viene como aprobada. Tu plan se activará con validación parcial."
-          : verified === "failed" && urlApproved
+          : verified === "failed" && urlLooksApproved && hasAnyRef
           ? "Detectamos que la URL viene como aprobada. Tu plan se activará con validación parcial."
           : verified === "error"
           ? "Ocurrió un problema al validar el pago. Intenta más tarde o contáctanos."

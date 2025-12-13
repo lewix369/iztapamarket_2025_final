@@ -1,6 +1,10 @@
 // src/components/TransportButtons.jsx
 import React from "react";
 
+const isMobile = () =>
+  typeof navigator !== "undefined" &&
+  /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
 /**
  * Botonera de transporte reutilizable
  * - Deeplinks a Google Maps, Waze, Uber y DiDi
@@ -27,18 +31,30 @@ const TransportButtons = ({ lat, lng, address = "", className = "" }) => {
     ? `https://waze.com/ul?ll=${Number(lat)},${Number(lng)}&navigate=yes`
     : `https://waze.com/ul?q=${encodeURIComponent(address)}&navigate=yes`;
 
+  const safeName = encodeURIComponent(
+    String(address || "Destino").trim() || "Destino"
+  );
+
   const uberUrl = hasLatLng
-    ? `https://m.uber.com/ul/?action=setPickup&dropoff[latitude]=${Number(
+    ? `https://m.uber.com/ul/?action=setPickup&pickup=my_location&dropoff[latitude]=${Number(
         lat
-      )}&dropoff[longitude]=${Number(lng)}`
+      )}&dropoff[longitude]=${Number(lng)}&dropoff[nickname]=${safeName}`
+    : address && String(address).trim()
+    ? `https://m.uber.com/ul/?action=setPickup&pickup=my_location&dropoff[formatted_address]=${encodeURIComponent(
+        String(address).trim()
+      )}&dropoff[nickname]=${safeName}`
     : "https://m.uber.com/ul/";
 
-  // Con address “a veces” DiDi da 404; con coords sí funciona.
+  // DiDi: usar landing oficial (evita 404 raros). Con coords funciona mejor.
   const didiUrl = hasLatLng
-    ? `https://m.didiglobal.com/passenger/destination?dropoff_latitude=${Number(
+    ? `https://page.didiglobal.com/passenger/landing?dropoff_latitude=${Number(
         lat
-      )}&dropoff_longitude=${Number(lng)}`
-    : "https://m.didiglobal.com/passenger/";
+      )}&dropoff_longitude=${Number(lng)}&utm_source=iztapamarket`
+    : address && String(address).trim()
+    ? `https://page.didiglobal.com/passenger/landing?dropoff_address=${encodeURIComponent(
+        String(address).trim()
+      )}&utm_source=iztapamarket`
+    : "https://page.didiglobal.com/passenger/landing?utm_source=iztapamarket";
 
   const canCopy = (address && String(address).trim().length > 0) || hasLatLng;
 
@@ -62,6 +78,8 @@ const TransportButtons = ({ lat, lng, address = "", className = "" }) => {
       alert("No se pudo copiar. Inténtalo de nuevo.");
     }
   };
+
+  const showDidi = isMobile();
 
   return (
     <div
@@ -102,16 +120,30 @@ const TransportButtons = ({ lat, lng, address = "", className = "" }) => {
         Uber
       </a>
 
-      <a
-        href={didiUrl}
-        target="_blank"
-        rel="noreferrer"
-        className={`${base} bg-orange-500 text-white hover:bg-orange-600 focus:ring-orange-300`}
-        title="Abrir en DiDi"
-      >
-        <IconBubble>D</IconBubble>
-        DiDi
-      </a>
+      {showDidi ? (
+        <a
+          href={didiUrl}
+          target="_blank"
+          rel="noreferrer"
+          className={`${base} bg-orange-500 text-white hover:bg-orange-600 focus:ring-orange-300`}
+          title="Abrir en DiDi"
+        >
+          <IconBubble>D</IconBubble>
+          DiDi
+        </a>
+      ) : (
+        <button
+          type="button"
+          onClick={() =>
+            alert("DiDi abre mejor desde tu celular 📱")
+          }
+          className={`${base} bg-orange-100 text-orange-700 hover:bg-orange-200 focus:ring-orange-300`}
+          title="DiDi (móvil recomendado)"
+        >
+          <IconBubble>D</IconBubble>
+          DiDi
+        </button>
+      )}
 
       <button
         type="button"
