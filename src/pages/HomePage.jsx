@@ -5,6 +5,39 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Link } from "react-router-dom";
 
+// Local fallback (no external requests like via.placeholder.com)
+const FALLBACK_IMG =
+  "data:image/svg+xml;charset=utf-8," +
+  encodeURIComponent(`
+  <svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1200\" height=\"675\">
+    <rect width=\"100%\" height=\"100%\" fill=\"#f3f4f6\"/>
+    <text x=\"50%\" y=\"50%\" dominant-baseline=\"middle\" text-anchor=\"middle\"
+      fill=\"#9ca3af\" font-family=\"Arial\" font-size=\"40\">IztapaMarket</text>
+  </svg>`);
+
+function toSupabaseThumb(url, { width = 600, quality = 70 } = {}) {
+  if (!url) return "";
+
+  const s = String(url).trim();
+  const low = s.toLowerCase();
+
+  // Bloquea placeholders externos (se rompen por DNS / bloqueos y no aportan)
+  if (
+    low.includes("via.placeholder.com") ||
+    low.includes("placehold.co") ||
+    low.includes("placeholder.com")
+  ) {
+    return "";
+  }
+
+  const marker = "/storage/v1/object/public/";
+  if (!s.includes(marker)) return s;
+  const rendered = s.replace(marker, "/storage/v1/render/image/public/");
+  const hasQuery = rendered.includes("?");
+  const params = `width=${width}&quality=${quality}`;
+  return hasQuery ? `${rendered}&${params}` : `${rendered}?${params}`;
+}
+
 const HomePage = () => {
   const [featuredBusinesses, setFeaturedBusinesses] = useState([]);
   const { supabase } = useSupabase();
@@ -23,7 +56,7 @@ const HomePage = () => {
     };
 
     fetchFeaturedBusinesses();
-  }, []);
+  }, [supabase]);
 
   return (
     <>
@@ -43,11 +76,14 @@ const HomePage = () => {
             featuredBusinesses.map((business) => (
               <Card key={business.id}>
                 <img
-                  src={
-                    business.imagen_url || "https://via.placeholder.com/400x200"
-                  }
+                  src={toSupabaseThumb(business.imagen_url, { width: 600, quality: 70 }) || FALLBACK_IMG}
                   alt={business.nombre}
                   className="w-full h-40 object-cover"
+                  loading="lazy"
+                  decoding="async"
+                  onError={(e) => {
+                    e.currentTarget.src = FALLBACK_IMG;
+                  }}
                 />
                 <CardHeader>
                   <CardTitle>{business.nombre}</CardTitle>

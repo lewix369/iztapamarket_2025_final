@@ -77,7 +77,26 @@ function clearPostPaymentState() {
   }
 }
 
+
 const MP_BASE = import.meta.env.VITE_MP_BASE || "http://127.0.0.1:3001/api";
+
+// ✅ Fallback interno (sin dependencias externas) para cuando no hay imagen
+const FALLBACK_IMAGE_DATA_URI =
+  "data:image/svg+xml;charset=UTF-8," +
+  encodeURIComponent(`
+<svg xmlns='http://www.w3.org/2000/svg' width='1200' height='800'>
+  <defs>
+    <linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>
+      <stop offset='0%' stop-color='#003366'/>
+      <stop offset='100%' stop-color='#0b2b55'/>
+    </linearGradient>
+  </defs>
+  <rect width='100%' height='100%' fill='url(#g)'/>
+  <circle cx='120' cy='120' r='70' fill='#f97316' opacity='0.95'/>
+  <text x='220' y='135' font-family='Arial, Helvetica, sans-serif' font-size='64' fill='white' font-weight='700'>IztapaMarket</text>
+  <text x='220' y='205' font-family='Arial, Helvetica, sans-serif' font-size='28' fill='rgba(255,255,255,0.85)'>Imagen pendiente</text>
+  <text x='60' y='740' font-family='Arial, Helvetica, sans-serif' font-size='22' fill='rgba(255,255,255,0.75)'>Súbela en el registro para que se vea en tu ficha</text>
+</svg>`);
 
 // (No usadas ahora, pero ok tenerlas)
 const getGoogleMapsEmbedUrl = async (nombre, direccion) => {
@@ -684,12 +703,14 @@ const RegisterBusinessPage = () => {
             .map((img) => img.trim())
             .filter((img) => img.length > 0);
 
-      let imagenUrl = formData.imagen_url;
-      if (!imagenUrl) {
-        imagenUrl = "https://via.placeholder.com/300x200.png?text=Ejemplo";
-      }
+      // ✅ Imagen final: si no hay imagen, usar fallback interno (sin llamadas externas)
+      let imagenUrl = formData.imagen_url || "";
+      if (!imagenUrl) imagenUrl = FALLBACK_IMAGE_DATA_URI;
 
-      if (imagenNegocio) {
+      // ⚡ Evitar doble subida:
+      // Si ya se subió en el onChange del input (y formData.imagen_url ya tiene URL), NO vuelvas a subir aquí.
+      // Solo sube aquí si hay archivo pero aún no existe imagen_url.
+      if (imagenNegocio && (!formData.imagen_url || !formData.imagen_url.trim())) {
         const imageFileName = `${Date.now()}-${imagenNegocio.name}`;
         const { error: uploadError } = await supabase.storage
           .from("negocios")
@@ -703,7 +724,7 @@ const RegisterBusinessPage = () => {
         const { data: urlData } = supabase.storage
           .from("negocios")
           .getPublicUrl(`imagenes/${imageFileName}`);
-        imagenUrl = urlData.publicUrl;
+        imagenUrl = urlData?.publicUrl || FALLBACK_IMAGE_DATA_URI;
       }
 
       if (selectedPlan === "free") {
@@ -1220,13 +1241,13 @@ const RegisterBusinessPage = () => {
                     try {
                       const fileExt = file.name.split(".").pop();
                       const fileName = `${Date.now()}.${fileExt}`;
-                      const filePath = `negocios/${fileName}`;
+                      const filePath = `imagenes/${fileName}`;
 
                       const { error } = await supabase.storage
                         .from("negocios")
                         .upload(filePath, file, {
                           cacheControl: "3600",
-                          upsert: false,
+                          upsert: true,
                         });
 
                       if (error) {

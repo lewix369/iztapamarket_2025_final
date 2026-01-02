@@ -3,8 +3,23 @@ import { Helmet } from "react-helmet";
 import { useParams, Link } from "react-router-dom";
 import { supabase } from "@/lib/supabaseClient";
 
-const PLACEHOLDER =
-  "https://images.unsplash.com/photo-1613243555978-636c48dc653c";
+// ✅ Fallback interno (sin dependencias externas) — consistente con IztapaMarket
+const FALLBACK_IMAGE_DATA_URI =
+  "data:image/svg+xml;charset=UTF-8," +
+  encodeURIComponent(`
+<svg xmlns='http://www.w3.org/2000/svg' width='1200' height='800'>
+  <defs>
+    <linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>
+      <stop offset='0%' stop-color='#003366'/>
+      <stop offset='100%' stop-color='#0b2b55'/>
+    </linearGradient>
+  </defs>
+  <rect width='100%' height='100%' fill='url(#g)'/>
+  <circle cx='120' cy='120' r='70' fill='#f97316' opacity='0.95'/>
+  <text x='220' y='135' font-family='Arial, Helvetica, sans-serif' font-size='64' fill='white' font-weight='700'>IztapaMarket</text>
+  <text x='220' y='205' font-family='Arial, Helvetica, sans-serif' font-size='28' fill='rgba(255,255,255,0.85)'>Imagen pendiente</text>
+  <text x='60' y='740' font-family='Arial, Helvetica, sans-serif' font-size='22' fill='rgba(255,255,255,0.75)'>Súbela para que se vea en tu ficha</text>
+</svg>`);
 
 export default function CategoryBusinessesPage() {
   const { slug } = useParams();
@@ -21,14 +36,11 @@ export default function CategoryBusinessesPage() {
     const fetchNegocios = async () => {
       setLoading(true);
 
-      // Normaliza el slug a la forma almacenada en la BD (p. ej. "alimentos y bebidas")
       const categoriaHuman = decodeURIComponent(slug).replace(/-/g, " ").trim();
 
-      // Columnas a seleccionar en ambas consultas
       const selectCols =
         "id,nombre,slug,descripcion,direccion,portada_url,imagen_url,logo_url,is_approved,is_deleted";
 
-      // 1) Primero: buscar por slug_categoria (ruta canónica)
       let { data, error } = await supabase
         .from("negocios")
         .select(selectCols)
@@ -36,12 +48,11 @@ export default function CategoryBusinessesPage() {
         .eq("is_deleted", false)
         .eq("is_approved", true);
 
-      // 2) Si no hay resultados y no hubo error, hacemos fallback por nombre de categoría
       if (!error && (data?.length ?? 0) === 0) {
         const fallback = await supabase
           .from("negocios")
           .select(selectCols)
-          .ilike("categoria", categoriaHuman) // ej. "alimentos y bebidas"
+          .ilike("categoria", categoriaHuman)
           .eq("is_deleted", false)
           .eq("is_approved", true);
 
@@ -124,10 +135,10 @@ export default function CategoryBusinessesPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {negocios.map((negocio) => {
               const cover =
-                negocio.portada_url ||
-                negocio.imagen_url ||
-                negocio.logo_url ||
-                PLACEHOLDER;
+                (negocio.portada_url && negocio.portada_url.trim()) ||
+                (negocio.imagen_url && negocio.imagen_url.trim()) ||
+                (negocio.logo_url && negocio.logo_url.trim()) ||
+                FALLBACK_IMAGE_DATA_URI;
 
               return (
                 <Link
@@ -142,7 +153,10 @@ export default function CategoryBusinessesPage() {
                       className="w-full h-full object-cover"
                       loading="lazy"
                       onError={(e) => {
-                        e.currentTarget.src = PLACEHOLDER;
+                        // evita loop infinito si la imagen falla
+                        if (e.currentTarget.src !== FALLBACK_IMAGE_DATA_URI) {
+                          e.currentTarget.src = FALLBACK_IMAGE_DATA_URI;
+                        }
                       }}
                     />
                   </div>

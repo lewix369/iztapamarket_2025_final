@@ -29,14 +29,64 @@ import {
 import { supabase } from "@/lib/supabaseClient";
 
 // ---------- util imágenes ----------
-const pickImage = (b) =>
-  b?.portada_url ||
-  b?.imagen_url ||
-  b?.cover_image_url ||
-  b?.business_cover_url ||
-  b?.logo_url ||
-  b?.image_url ||
-  "https://images.unsplash.com/photo-1613243555978-636c48dc653c";
+const FALLBACK_IMG =
+  "data:image/svg+xml;charset=utf-8," +
+  encodeURIComponent(`
+    <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675">
+      <rect width="100%" height="100%" fill="#f3f4f6"/>
+      <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle"
+        fill="#9ca3af" font-family="Arial" font-size="40">IztapaMarket</text>
+    </svg>
+  `);
+
+const isPlaceholderUrl = (url) =>
+  typeof url === "string" &&
+  /via\.placeholder\.com|placeholder\.com|300x200|text=Ejemplo/i.test(url);
+
+const pickImage = (b) => {
+  const url =
+    b?.portada_url ||
+    b?.imagen_url ||
+    b?.cover_image_url ||
+    b?.business_cover_url ||
+    b?.logo_url ||
+    b?.image_url;
+
+  if (!url) return FALLBACK_IMG;
+  if (isPlaceholderUrl(url)) return FALLBACK_IMG;
+  return url;
+};
+
+// Convierte URL pública de Supabase Storage a thumbnail usando Image Transform
+// - Si ya viene como render/image, la deja
+// - Si es externa (http(s) fuera de Supabase), la deja
+const toSupabaseThumb = (url, { width = 800, quality = 70 } = {}) => {
+  if (!url || typeof url !== "string") return url;
+
+  // ya es endpoint de render
+  if (url.includes("/storage/v1/render/image/")) return url;
+
+  // intenta convertir object/public -> render/image/public
+  const marker = "/storage/v1/object/public/";
+  if (url.includes(marker)) {
+    const [base, query = ""] = url.split("?");
+    const renderUrl = base.replace(
+      "/storage/v1/object/public/",
+      "/storage/v1/render/image/public/"
+    );
+
+    const params = new URLSearchParams(query);
+    // parámetros típicos de supabase image transform
+    params.set("width", String(width));
+    params.set("quality", String(quality));
+    params.set("resize", params.get("resize") || "cover");
+
+    const qs = params.toString();
+    return qs ? `${renderUrl}?${qs}` : renderUrl;
+  }
+
+  return url;
+};
 
 // ---------- helpers ubicación ----------
 const toFloat = (v) =>
@@ -504,11 +554,17 @@ const BusinessListPage = () => {
                         <img
                           alt={`${business.nombre} - ${business.descripcion}`}
                           className="w-full h-48 object-cover group-hover:scale-105 transition-transform duration-300"
-                          src={pickImage(business)}
+                          src={
+                            toSupabaseThumb(pickImage(business), {
+                              width: 900,
+                              quality: 70,
+                            })
+                          }
+                          loading="lazy"
+                          decoding="async"
                           onError={(e) => {
                             e.currentTarget.onerror = null;
-                            e.currentTarget.src =
-                              "https://images.unsplash.com/photo-1613243555978-636c48dc653c";
+                            e.currentTarget.src = FALLBACK_IMG;
                           }}
                         />
                         <div className="absolute top-4 left-4">
@@ -595,11 +651,17 @@ const BusinessListPage = () => {
                           <img
                             alt={`${business.nombre} - ${business.descripcion}`}
                             className="w-full h-full object-cover"
-                            src={pickImage(business)}
+                            src={
+                              toSupabaseThumb(pickImage(business), {
+                                width: 900,
+                                quality: 70,
+                              })
+                            }
+                            loading="lazy"
+                            decoding="async"
                             onError={(e) => {
                               e.currentTarget.onerror = null;
-                              e.currentTarget.src =
-                                "https://images.unsplash.com/photo-1613243555978-636c48dc653c";
+                              e.currentTarget.src = FALLBACK_IMG;
                             }}
                           />
                           <div className="absolute top-4 left-4">
