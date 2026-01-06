@@ -26,7 +26,6 @@ const CategoriaDetalle = () => {
         .from("negocios")
         .select("*")
         .eq("slug_categoria", slug)
-        .eq("estado_pago", "Aprobado")
         .eq("is_deleted", false);
 
       if (error) {

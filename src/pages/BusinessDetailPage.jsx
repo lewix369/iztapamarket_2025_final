@@ -136,7 +136,7 @@ const LightboxGallery = ({ images = [], title = "Galería" }) => {
                 <img
                   src={thumb}
                   alt={`Foto ${i + 1} de ${title}`}
-                  className="w-full h-60 object-cover rounded-2xl shadow-md cursor-pointer object-center galeria-img"
+                  className="w-full h-60 object-cover rounded-2xl shadow-md cursor-pointer object-center aspect-video bg-gray-100"
                   width="800"
                   height="600"
                   loading={i < 2 ? "eager" : "lazy"}
@@ -166,7 +166,7 @@ const LightboxGallery = ({ images = [], title = "Galería" }) => {
               <img
                 src={thumb}
                 alt={`Foto ${i + 1} de ${title}`}
-                className="w-full h-40 object-cover rounded-lg galeria-img"
+                className="w-full h-40 object-cover rounded-lg aspect-video bg-gray-100"
                 width="640"
                 height="360"
                 loading={i < 2 ? "eager" : "lazy"}
@@ -949,71 +949,50 @@ const BusinessDetailPage = () => {
   // URL segura para el logo
   const logoSrc = resolvePublicUrl(business?.logo_url);
 
+  // --- SEO helpers (no UI impact) ---
+  const canonicalUrl = `https://iztapamarket.com/negocio/${business?.slug}`;
+
+  // Prefer logo, then portada, then imagen_url; always try to resolve to an absolute URL
+  const seoImage =
+    optimizeImage(
+      resolvePublicUrl(business?.logo_url) ||
+        resolvePublicUrl(business?.portada_url) ||
+        resolvePublicUrl(business?.imagen_url) ||
+        business?.logo_url ||
+        business?.portada_url ||
+        business?.imagen_url ||
+        ""
+    ) || "";
+
+  const seoTitle = business?.metaTitle || `${business?.nombre} | IztapaMarket`;
+  const seoDescription =
+    business?.metaDescription ||
+    (business?.descripcion ? business.descripcion.slice(0, 160) : "");
+
   return (
     <>
       <Helmet>
-        <title>
-          {business.metaTitle || `${business.nombre} | IztapaMarket`}
-        </title>
-        <meta
-          name="description"
-          content={
-            business.metaDescription ||
-            business.descripcion?.slice(0, 150) ||
-            ""
-          }
-        />
-        <meta
-          property="og:title"
-          content={business.metaTitle || business.nombre}
-        />
-        <meta
-          property="og:description"
-          content={
-            business.metaDescription ||
-            business.descripcion?.slice(0, 150) ||
-            ""
-          }
-        />
-        <meta
-          property="og:image"
-          content={optimizeImage(
-            resolvePublicUrl(business.logo_url) || business.imagen_url
-          )}
-        />
+        <title>{seoTitle}</title>
+        <meta name="description" content={seoDescription} />
+        <link rel="canonical" href={canonicalUrl} />
+        <meta property="og:title" content={seoTitle} />
+        <meta property="og:description" content={seoDescription} />
+        <meta property="og:image" content={seoImage} />
         <meta property="og:type" content="business.business" />
-        <meta
-          property="og:url"
-          content={`https://iztapamarket.com/negocio/${business.slug}`}
-        />
+        <meta property="og:url" content={canonicalUrl} />
         <meta name="robots" content="index, follow" />
         <meta name="author" content="IztapaMarket" />
         <meta name="twitter:card" content="summary_large_image" />
-        <meta
-          name="twitter:title"
-          content={business.metaTitle || business.nombre}
-        />
-        <meta
-          name="twitter:description"
-          content={
-            business.metaDescription ||
-            business.descripcion?.slice(0, 150) ||
-            ""
-          }
-        />
-        <meta
-          name="twitter:image"
-          content={optimizeImage(
-            resolvePublicUrl(business.logo_url) || business.imagen_url
-          )}
-        />
+        <meta name="twitter:title" content={seoTitle} />
+        <meta name="twitter:description" content={seoDescription} />
+        <meta name="twitter:image" content={seoImage} />
         <script type="application/ld+json">
           {JSON.stringify({
             "@context": "https://schema.org",
             "@type": "LocalBusiness",
             name: business?.nombre || "",
             description: business?.descripcion || "",
-            image: business?.logo_url || business?.imagen_url || "",
+            image: seoImage,
             telephone: business?.telefono || "",
             address: {
               "@type": "PostalAddress",
@@ -1023,10 +1002,11 @@ const BusinessDetailPage = () => {
               postalCode: "09000",
               addressCountry: "MX",
             },
-            url: `https://iztapamarket.com/negocio/${business?.slug}`,
+            url: canonicalUrl,
             sameAs: [
               business?.facebook,
               business?.instagram,
+              business?.tiktok,
               business?.web,
             ].filter(Boolean),
           })}
@@ -1481,13 +1461,3 @@ const BusinessDetailPage = () => {
 };
 
 export default BusinessDetailPage;
-
-<style jsx global>{`
-  .galeria-img {
-    width: 100%;
-    aspect-ratio: 16 / 9;
-    object-fit: cover;
-    border-radius: 8px;
-    background-color: #f0f0f0;
-  }
-`}</style>;

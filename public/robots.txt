@@ -1,5 +1,7 @@
 User-agent: *
 Disallow: /admin/
 Disallow: /login/
+Disallow: /test-pago/
+Disallow: /debug-user/
 
 Sitemap: https://iztapamarket.com/sitemap.xml

@@ -6,6 +6,7 @@ import {
   useLocation,
   Navigate,
   useParams,
+  Link,
 } from "react-router-dom";
 
 import Home from "@/pages/Home";
@@ -39,6 +40,7 @@ import PayFailure from "@/pages/PayFailure";
 import PayPending from "@/pages/PayPending";
 import Checkout from "@/pages/Checkout";
 // import MagicLinkBridge from "@/pages/MagicLinkBridge"; // ← removido
+import { categorias } from "@/data/negocios";
 
 function RedirectRegisterBusiness() {
   const q = window.location.search || "";
@@ -51,6 +53,43 @@ function RedirectRegisterTier() {
   if (!q.get("plan") && tier) q.set("plan", tier.toLowerCase());
   const qs = q.toString();
   return <Navigate to={`/registro${qs ? `?${qs}` : ""}`} replace />;
+}
+
+function RedirectToCategoriaSlug() {
+  const { slug } = useParams();
+  const q = window.location.search || "";
+  return <Navigate to={`/categorias/${slug}${q}`} replace />;
+}
+
+function CategoriesIndexPage() {
+  return (
+    <div className="container mx-auto px-4 py-10">
+      <h1 className="text-3xl font-bold text-[#003366] mb-6">Categorías</h1>
+      <p className="text-gray-600 mb-6">
+        Explora negocios locales por categoría en Iztapalapa.
+      </p>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {categorias.map((cat) => (
+          <Link
+            key={cat.slug}
+            to={`/categorias/${cat.slug}`}
+            className="group rounded-xl border bg-white p-5 hover:shadow-md transition"
+          >
+            <div className="flex items-center gap-3">
+              <div className="text-3xl">{cat.icono}</div>
+              <div>
+                <div className="text-lg font-semibold text-[#003366] group-hover:underline">
+                  {cat.nombre}
+                </div>
+                <div className="text-sm text-gray-500">{cat.descripcion}</div>
+              </div>
+            </div>
+          </Link>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function App() {
@@ -126,13 +165,17 @@ function Layout() {
             element={<RegistroPremiumSuccess />}
           />
 
+          <Route path="/categorias" element={<CategoriesIndexPage />} />
+          <Route path="/categorias/:slug" element={<CategoryBusinessesPage />} />
+
+          {/* Legacy routes → canonical */}
           <Route
-            path="/categorias/:slug"
-            element={<CategoryBusinessesPage />}
+            path="/categorias-detalle/:slug"
+            element={<RedirectToCategoriaSlug />}
           />
           <Route
             path="/negocios/categoria/:slug"
-            element={<CategoryBusinessesPage />}
+            element={<RedirectToCategoriaSlug />}
           />
 
           <Route

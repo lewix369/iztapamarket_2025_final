@@ -307,6 +307,19 @@ const BusinessListPage = () => {
 
   // ---------- datos listos para pintar (con distancia/orden por cercanía) ----------
   const businessesForView = useMemo(() => {
+    const normalizePlan = (p) => String(p ?? "").trim().toLowerCase();
+
+    // Ranking: Premium (0) -> Pro (1) -> Free/Gratis (2) -> Otros/Desconocidos (3)
+    const planRank = (b) => {
+      const p = normalizePlan(b?.plan_type);
+      if (p === "premium") return 0;
+      if (["pro", "profesional", "professional"].includes(p)) return 1;
+      if (["free", "gratis"].includes(p)) return 2;
+      return 3;
+    };
+
+    const nameKey = (b) => String(b?.nombre ?? "").trim().toLowerCase();
+
     const withDistance = businesses.map((b) => {
       if (userLoc) {
         const ll = getLatLng(b);
@@ -318,13 +331,30 @@ const BusinessListPage = () => {
       return { ...b, __distance_km: null };
     });
 
+    // 1) Si está activo "Cerca de mí": distancia primero, luego plan, luego nombre
     if (sortMode === "nearby" && userLoc) {
       withDistance.sort((a, b) => {
         const da = a.__distance_km ?? Number.POSITIVE_INFINITY;
         const db = b.__distance_km ?? Number.POSITIVE_INFINITY;
-        return da - db;
+        if (da !== db) return da - db;
+
+        const ra = planRank(a);
+        const rb = planRank(b);
+        if (ra !== rb) return ra - rb;
+
+        return nameKey(a).localeCompare(nameKey(b), "es");
       });
+      return withDistance;
     }
+
+    // 2) Default: Premium/Pro arriba, luego Gratis, luego nombre (estable)
+    withDistance.sort((a, b) => {
+      const ra = planRank(a);
+      const rb = planRank(b);
+      if (ra !== rb) return ra - rb;
+      return nameKey(a).localeCompare(nameKey(b), "es");
+    });
+
     return withDistance;
   }, [businesses, userLoc, sortMode]);
 

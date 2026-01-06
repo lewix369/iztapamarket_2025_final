@@ -21,11 +21,40 @@ const FALLBACK_IMAGE_DATA_URI =
   <text x='60' y='740' font-family='Arial, Helvetica, sans-serif' font-size='22' fill='rgba(255,255,255,0.75)'>Súbela para que se vea en tu ficha</text>
 </svg>`);
 
+const SITE_URL = "https://iztapamarket.com";
+
+function humanizeSlug(slug = "") {
+  return String(slug)
+    .replace(/-/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function planRank(plan) {
+  const p = String(plan || "").toLowerCase();
+  if (p === "premium") return 0;
+  if (p === "pro") return 1;
+  return 2; // free/empty/unknown
+}
+
+function planLabel(plan) {
+  const p = String(plan || "").toLowerCase();
+  if (p === "premium") return "Premium";
+  if (p === "pro") return "Pro";
+  return "";
+}
+
 export default function CategoryBusinessesPage() {
   const { slug } = useParams();
   if (!slug) {
     return <div className="p-6 text-red-500">Slug de categoría no válido.</div>;
   }
+
+  const prettyCategory = humanizeSlug(slug);
+  const seoTitle = `${prettyCategory} en Iztapalapa | IztapaMarket`;
+  const seoDescription = `Encuentra ${prettyCategory} en Iztapalapa: negocios locales por categoría, teléfonos, dirección y contacto por WhatsApp. Descubre opciones cerca de ti en IztapaMarket.`;
+  const canonicalUrl = `${SITE_URL}/categorias/${slug}`;
 
   const [negocios, setNegocios] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -39,33 +68,52 @@ export default function CategoryBusinessesPage() {
       const categoriaHuman = decodeURIComponent(slug).replace(/-/g, " ").trim();
 
       const selectCols =
-        "id,nombre,slug,descripcion,direccion,portada_url,imagen_url,logo_url,is_approved,is_deleted";
+        "id,nombre,slug,descripcion,direccion,portada_url,imagen_url,logo_url,plan_type,is_approved,is_deleted,slug_categoria,categoria,telefono,hours";
 
-      let { data, error } = await supabase
+      // 1) Por slug_categoria (normalizado)
+      const bySlug = await supabase
         .from("negocios")
         .select(selectCols)
         .eq("slug_categoria", slug)
         .eq("is_deleted", false)
         .eq("is_approved", true);
 
-      if (!error && (data?.length ?? 0) === 0) {
-        const fallback = await supabase
-          .from("negocios")
-          .select(selectCols)
-          .ilike("categoria", categoriaHuman)
-          .eq("is_deleted", false)
-          .eq("is_approved", true);
+      // 2) Fallback por categoria (texto), para casos donde slug_categoria está vacío/null
+      const byCategoria = await supabase
+        .from("negocios")
+        .select(selectCols)
+        .ilike("categoria", `%${categoriaHuman}%`)
+        .eq("is_deleted", false)
+        .eq("is_approved", true);
 
-        data = fallback.data;
-        error = fallback.error;
-      }
+      const error = bySlug.error || byCategoria.error;
+
+      // Unir + deduplicar por id
+      const merged = [...(bySlug.data || []), ...(byCategoria.data || [])];
+      const seen = new Set();
+      const data = merged.filter((n) => {
+        const id = n?.id;
+        if (!id) return false;
+        if (seen.has(id)) return false;
+        seen.add(id);
+        return true;
+      });
 
       if (!cancelled) {
         if (error) {
           console.error("Error al obtener negocios por categoría:", error);
           setNegocios([]);
         } else {
-          setNegocios(data || []);
+          const sorted = [...(data || [])].sort((a, b) => {
+            const ra = planRank(a?.plan_type);
+            const rb = planRank(b?.plan_type);
+            if (ra !== rb) return ra - rb;
+            // fallback estable: nombre
+            return String(a?.nombre || "").localeCompare(String(b?.nombre || ""), "es", {
+              sensitivity: "base",
+            });
+          });
+          setNegocios(sorted);
         }
         setLoading(false);
       }
@@ -83,43 +131,20 @@ export default function CategoryBusinessesPage() {
   return (
     <>
       <Helmet>
-        <title>{`Negocios en ${slug.replace(/-/g, " ")} | IztapaMarket`}</title>
-        <meta
-          name="description"
-          content={`Explora negocios locales en la categoría ${slug.replace(
-            /-/g,
-            " "
-          )} dentro de IztapaMarket.`}
-        />
+        <title>{seoTitle}</title>
+        <meta name="description" content={seoDescription} />
+        <link rel="canonical" href={canonicalUrl} />
+
         <meta name="robots" content="index, follow" />
+
         <meta property="og:type" content="website" />
-        <meta
-          property="og:title"
-          content={`Negocios en ${slug.replace(/-/g, " ")} | IztapaMarket`}
-        />
-        <meta
-          property="og:description"
-          content={`Explora negocios locales en la categoría ${slug.replace(
-            /-/g,
-            " "
-          )} dentro de IztapaMarket.`}
-        />
-        <meta
-          property="og:url"
-          content={`https://iztapamarket.com/negocios/${slug}`}
-        />
+        <meta property="og:title" content={seoTitle} />
+        <meta property="og:description" content={seoDescription} />
+        <meta property="og:url" content={canonicalUrl} />
+
         <meta name="twitter:card" content="summary" />
-        <meta
-          name="twitter:title"
-          content={`Negocios en ${slug.replace(/-/g, " ")} | IztapaMarket`}
-        />
-        <meta
-          name="twitter:description"
-          content={`Explora negocios locales en la categoría ${slug.replace(
-            /-/g,
-            " "
-          )} dentro de IztapaMarket.`}
-        />
+        <meta name="twitter:title" content={seoTitle} />
+        <meta name="twitter:description" content={seoDescription} />
       </Helmet>
 
       <div className="max-w-6xl mx-auto px-4 py-10">
@@ -144,9 +169,20 @@ export default function CategoryBusinessesPage() {
                 <Link
                   key={negocio.id}
                   to={`/negocio/${negocio.slug}`}
-                  className="block border rounded-lg overflow-hidden shadow hover:shadow-lg transition"
+                  className={`block border rounded-lg overflow-hidden shadow hover:shadow-lg transition ${
+                    planRank(negocio?.plan_type) < 2
+                      ? "border-[#f97316]/60"
+                      : "border-gray-200"
+                  }`}
                 >
-                  <div className="w-full h-48 overflow-hidden bg-gray-100">
+                  <div className="relative w-full h-48 overflow-hidden bg-gray-100">
+                    {planRank(negocio?.plan_type) < 2 && (
+                      <div className="absolute top-3 left-3 z-10">
+                        <span className="inline-flex items-center rounded-full bg-[#f97316] px-3 py-1 text-xs font-semibold text-white shadow">
+                          {planLabel(negocio?.plan_type)}
+                        </span>
+                      </div>
+                    )}
                     <img
                       src={cover}
                       alt={negocio.nombre || "Negocio"}
