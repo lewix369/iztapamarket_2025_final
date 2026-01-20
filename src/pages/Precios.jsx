@@ -85,13 +85,13 @@ const Precios = () => {
         "Descripción extendida (500 caracteres)",
         "Logo del negocio",
       ],
-      limitations: ["Sin videos", "Sin sitio web básico", "Soporte por email"],
+      limitations: ["Sin video corto del negocio", "Sin sitio web básico", "Soporte por email"],
     },
     {
       name: "Premium",
       price: "$500",
       period: "/mes",
-      description: "La solución completa para negocios ambiciosos",
+      description: "Para negocios que quieren destacar y vender más",
       icon: Crown,
       color: "from-orange-500 to-red-600",
       buttonColor:
@@ -99,8 +99,9 @@ const Precios = () => {
       popular: false,
       features: [
         "Todo lo del plan Profesional",
+        "Video corto del negocio (grabado en tu local)",
         "Multimedia ilimitado",
-        "Videos promocionales",
+        "Videos (extras) para redes sociales",
         "Optimización SEO avanzada",
         "Página web básica (landing de 1 página)",
         "Incluye tus datos, fotos y contacto alojados por IztapaMarket",
@@ -108,7 +109,7 @@ const Precios = () => {
         "Crear logo con IA (incluido)",
         "Crear portada con IA (incluido)",
         "Estadísticas avanzadas",
-        "Soporte 24/7",
+        "Soporte directo por WhatsApp",
         "Promociones ilimitadas",
         "Insignia de 'Destacado'",
         "Aparición en página principal",
@@ -373,7 +374,7 @@ const Precios = () => {
                   </tr>
                   <tr className="hover:bg-gray-50">
                     <td className="px-6 py-4 font-medium text-gray-900">
-                      Videos
+                      Video corto del negocio
                     </td>
                     <td className="px-6 py-4 text-center">❌</td>
                     <td className="px-6 py-4 text-center">❌</td>
@@ -417,7 +418,7 @@ const Precios = () => {
                     </td>
                     <td className="px-6 py-4 text-center">Email</td>
                     <td className="px-6 py-4 text-center">Email</td>
-                    <td className="px-6 py-4 text-center">24/7</td>
+                    <td className="px-6 py-4 text-center">WhatsApp</td>
                   </tr>
                 </tbody>
               </table>
