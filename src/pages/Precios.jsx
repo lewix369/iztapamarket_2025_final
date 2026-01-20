@@ -101,7 +101,7 @@ const Precios = () => {
         "Todo lo del plan Profesional",
         "Video corto del negocio (grabado en tu local)",
         "Multimedia ilimitado",
-        "Videos (extras) para redes sociales",
+        "Orientación y acompañamiento digital",
         "Optimización SEO avanzada",
         "Página web básica (landing de 1 página)",
         "Incluye tus datos, fotos y contacto alojados por IztapaMarket",
