@@ -3,7 +3,16 @@ import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { Helmet } from "react-helmet";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { motion } from "framer-motion";
-import { Search, Star, MapPin, Clock, Grid, List, FilterX } from "lucide-react";
+import {
+  Search,
+  Star,
+  MapPin,
+  Clock,
+  Grid,
+  List,
+  FilterX,
+  Navigation,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -96,6 +105,22 @@ const getLatLng = (b) => {
   const lat = toFloat(b?.lat ?? b?.latitud);
   const lng = toFloat(b?.lng ?? b?.longitud);
   return Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null;
+};
+
+const getDirectionsUrl = (business) => {
+  const coords = getLatLng(business);
+
+  if (coords) {
+    return `https://www.google.com/maps/dir/?api=1&destination=${coords.lat},${coords.lng}`;
+  }
+
+  const address = String(business?.direccion || "").trim();
+  if (!address) return null;
+
+  const destination = `${business?.nombre || ""}, ${address}, Iztapalapa, Ciudad de México`;
+  return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
+    destination
+  )}`;
 };
 
 function haversineKm(lat1, lon1, lat2, lon2) {
@@ -662,15 +687,34 @@ const BusinessListPage = () => {
                           <div className="text-sm text-gray-500">
                             {business.reviews_count || 0} reseñas
                           </div>
-                          <Link to={`/negocio/${business.slug}`}>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="group-hover:bg-blue-600 group-hover:text-white transition-colors"
-                            >
-                              Ver Detalles
-                            </Button>
-                          </Link>
+                          <div className="flex items-center gap-2">
+                            <Link to={`/negocio/${business.slug}`}>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="group-hover:bg-blue-600 group-hover:text-white transition-colors"
+                              >
+                                Ver Detalles
+                              </Button>
+                            </Link>
+                            {getDirectionsUrl(business) && (
+                              <Button
+                                asChild
+                                size="sm"
+                                className="bg-orange-500 hover:bg-orange-600 text-white"
+                              >
+                                <a
+                                  href={getDirectionsUrl(business)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  aria-label={`Cómo llegar a ${business.nombre}`}
+                                >
+                                  <Navigation className="h-4 w-4 mr-1.5" />
+                                  Cómo llegar
+                                </a>
+                              </Button>
+                            )}
+                          </div>
                         </div>
                       </CardContent>
                     </Card>
@@ -760,12 +804,28 @@ const BusinessListPage = () => {
                               <span>{business.hours || "N/A"}</span>
                             </div>
                           </div>
-                          <div className="flex justify-end">
+                          <div className="flex justify-end gap-2">
                             <Link to={`/negocio/${business.slug}`}>
                               <Button className="bg-blue-600 hover:bg-blue-700">
                                 Ver Detalles
                               </Button>
                             </Link>
+                            {getDirectionsUrl(business) && (
+                              <Button
+                                asChild
+                                className="bg-orange-500 hover:bg-orange-600 text-white"
+                              >
+                                <a
+                                  href={getDirectionsUrl(business)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  aria-label={`Cómo llegar a ${business.nombre}`}
+                                >
+                                  <Navigation className="h-4 w-4 mr-2" />
+                                  Cómo llegar
+                                </a>
+                              </Button>
+                            )}
                           </div>
                         </div>
                       </div>
