@@ -683,16 +683,19 @@ const BusinessListPage = () => {
                             <span>{business.hours || "N/A"}</span>
                           </div>
                         </div>
-                        <div className="flex items-center justify-between">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                           <div className="text-sm text-gray-500">
                             {business.reviews_count || 0} reseñas
                           </div>
-                          <div className="flex items-center gap-2">
-                            <Link to={`/negocio/${business.slug}`}>
+                          <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:items-center">
+                            <Link
+                              to={`/negocio/${business.slug}`}
+                              className="w-full sm:w-auto"
+                            >
                               <Button
                                 variant="outline"
                                 size="sm"
-                                className="group-hover:bg-blue-600 group-hover:text-white transition-colors"
+                                className="w-full whitespace-nowrap group-hover:bg-blue-600 group-hover:text-white transition-colors"
                               >
                                 Ver Detalles
                               </Button>
@@ -701,7 +704,7 @@ const BusinessListPage = () => {
                               <Button
                                 asChild
                                 size="sm"
-                                className="bg-orange-500 hover:bg-orange-600 text-white"
+                                className="w-full whitespace-nowrap bg-orange-500 hover:bg-orange-600 text-white sm:w-auto"
                               >
                                 <a
                                   href={getDirectionsUrl(business)}
@@ -804,16 +807,19 @@ const BusinessListPage = () => {
                               <span>{business.hours || "N/A"}</span>
                             </div>
                           </div>
-                          <div className="flex justify-end gap-2">
-                            <Link to={`/negocio/${business.slug}`}>
-                              <Button className="bg-blue-600 hover:bg-blue-700">
+                          <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:justify-end">
+                            <Link
+                              to={`/negocio/${business.slug}`}
+                              className="w-full sm:w-auto"
+                            >
+                              <Button className="w-full whitespace-nowrap bg-blue-600 hover:bg-blue-700">
                                 Ver Detalles
                               </Button>
                             </Link>
                             {getDirectionsUrl(business) && (
                               <Button
                                 asChild
-                                className="bg-orange-500 hover:bg-orange-600 text-white"
+                                className="w-full whitespace-nowrap bg-orange-500 hover:bg-orange-600 text-white sm:w-auto"
                               >
                                 <a
                                   href={getDirectionsUrl(business)}
