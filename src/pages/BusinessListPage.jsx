@@ -1,5 +1,11 @@
 // src/pages/BusinessListPage.jsx
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, {
+  useState,
+  useEffect,
+  useCallback,
+  useMemo,
+  useRef,
+} from "react";
 import { Helmet } from "react-helmet";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { motion } from "framer-motion";
@@ -165,6 +171,8 @@ const BusinessListPage = () => {
     locationQuery.get("sort") || "default"
   ); // "default" | "nearby"
   const [isLocating, setIsLocating] = useState(false); // NUEVO
+  const [visibleCount, setVisibleCount] = useState(24);
+  const loadMoreRef = useRef(null);
 
   const planOptions = useMemo(
     () => [
@@ -383,6 +391,37 @@ const BusinessListPage = () => {
     return withDistance;
   }, [businesses, userLoc, sortMode]);
 
+  const visibleBusinesses = useMemo(
+    () => businessesForView.slice(0, visibleCount),
+    [businessesForView, visibleCount]
+  );
+
+  useEffect(() => {
+    setVisibleCount(24);
+  }, [searchTerm, selectedPlan, selectedCategory, sortMode]);
+
+  useEffect(() => {
+    const loadMoreNode = loadMoreRef.current;
+
+    if (!loadMoreNode || visibleCount >= businessesForView.length) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry.isIntersecting) return;
+
+        observer.disconnect();
+        setVisibleCount((current) =>
+          Math.min(current + 24, businessesForView.length)
+        );
+      },
+      { rootMargin: "600px 0px" }
+    );
+
+    observer.observe(loadMoreNode);
+
+    return () => observer.disconnect();
+  }, [visibleCount, businessesForView.length]);
+
   // ---------- render ----------
   return (
     <div className="min-h-screen">
@@ -596,13 +635,8 @@ const BusinessListPage = () => {
                   : "space-y-6"
               }
             >
-              {businessesForView.map((business, index) => (
-                <motion.div
-                  key={business.id}
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: index * 0.05 }}
-                >
+              {visibleBusinesses.map((business) => (
+                <div key={business.id}>
                   {viewMode === "grid" ? (
                     <Card className="group hover:shadow-2xl transition-all duration-300 border-0 shadow-lg overflow-hidden">
                       <div className="relative">
@@ -837,8 +871,15 @@ const BusinessListPage = () => {
                       </div>
                     </Card>
                   )}
-                </motion.div>
+                </div>
               ))}
+              {visibleCount < businessesForView.length && (
+                <div
+                  ref={loadMoreRef}
+                  className="col-span-full h-1"
+                  aria-hidden="true"
+                />
+              )}
             </div>
           )}
         </div>
