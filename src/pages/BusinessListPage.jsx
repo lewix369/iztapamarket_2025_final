@@ -797,10 +797,12 @@ const BusinessListPage = () => {
                               {business.__distance_km.toFixed(1)} km
                             </div>
                           )}
-                          <div className="flex items-center space-x-2 text-sm text-gray-500">
-                            <Clock className="h-4 w-4" />
-                            <span>{business.hours || "N/A"}</span>
-                          </div>
+                          {business.hours && (
+                            <div className="flex items-center space-x-2 text-sm text-gray-500">
+                              <Clock className="h-4 w-4" />
+                              <span>{business.hours}</span>
+                            </div>
+                          )}
                         </div>
                         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                           <div className="text-sm text-gray-500">
@@ -921,10 +923,12 @@ const BusinessListPage = () => {
                                 {business.__distance_km.toFixed(1)} km
                               </div>
                             )}
-                            <div className="flex items-center space-x-2 text-sm text-gray-500">
-                              <Clock className="h-4 w-4" />
-                              <span>{business.hours || "N/A"}</span>
-                            </div>
+                            {business.hours && (
+                              <div className="flex items-center space-x-2 text-sm text-gray-500">
+                                <Clock className="h-4 w-4" />
+                                <span>{business.hours}</span>
+                              </div>
+                            )}
                           </div>
                           <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:justify-end">
                             <Link
