@@ -39,9 +39,12 @@ import {
 
 import {
   searchBusinesses as fetchBusinessesFromDb,
+  getBusinessesForNearby,
   getDistinctCategories,
 } from "@/lib/database";
 import { supabase } from "@/lib/supabaseClient";
+
+const PAGE_SIZE = 24;
 
 // ---------- util imágenes ----------
 const FALLBACK_IMG =
@@ -155,6 +158,10 @@ const BusinessListPage = () => {
 
   const [businesses, setBusinesses] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [totalBusinesses, setTotalBusinesses] = useState(0);
+  const [page, setPage] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
   const [categories, setCategories] = useState([]);
 
   const [searchTerm, setSearchTerm] = useState(locationQuery.get("q") || "");
@@ -171,8 +178,11 @@ const BusinessListPage = () => {
     locationQuery.get("sort") || "default"
   ); // "default" | "nearby"
   const [isLocating, setIsLocating] = useState(false); // NUEVO
-  const [visibleCount, setVisibleCount] = useState(24);
-  const loadMoreRef = useRef(null);
+  const [nearbyVisibleCount, setNearbyVisibleCount] = useState(PAGE_SIZE);
+  const requestIdRef = useRef(0);
+  const isLoadingMoreRef = useRef(false);
+  const loadMoreActionRef = useRef(null);
+  const observerRef = useRef(null);
 
   const planOptions = useMemo(
     () => [
@@ -193,10 +203,7 @@ const BusinessListPage = () => {
       .toLowerCase()
       .replace(/\b\w/g, (l) => l.toUpperCase());
 
-  // ---------- carga principal (respeta filtros actuales) ----------
-  const loadInitialData = useCallback(async () => {
-    setIsLoading(true);
-
+  const getCurrentFilters = useCallback(() => {
     const termToFetch =
       searchTerm.trim() === "" ? undefined : searchTerm.trim();
     const planValueToFetch =
@@ -204,23 +211,11 @@ const BusinessListPage = () => {
     const categoryValueToFetch =
       selectedCategory === "all" ? undefined : selectedCategory;
 
-    const [businessData, categoriesData] = await Promise.all([
-      fetchBusinessesFromDb(
-        supabase,
-        termToFetch,
-        planValueToFetch,
-        categoryValueToFetch
-      ),
-      getDistinctCategories(supabase),
-    ]);
+    return { termToFetch, planValueToFetch, categoryValueToFetch };
+  }, [searchTerm, selectedPlan, selectedCategory]);
 
-    // 🔒 BLINDAJE EN CLIENTE: sólo mostrar aprobados y no eliminados
-    const sanitized = (businessData || []).filter(
-      (b) => b?.is_approved === true && b?.is_deleted !== true
-    );
-
-    setBusinesses(sanitized);
-
+  const loadCategories = useCallback(async () => {
+    const categoriesData = await getDistinctCategories(supabase);
     const rawCats = (Array.isArray(categoriesData) ? categoriesData : []).map(
       (c) => {
         if (typeof c === "string") return c;
@@ -231,18 +226,99 @@ const BusinessListPage = () => {
       }
     );
 
-    const uniqueCategories = [
+    setCategories([
       "all",
       ...Array.from(
         new Set(rawCats.map((c) => c.trim().toLowerCase()).filter(Boolean))
       ),
-    ];
-    setCategories(uniqueCategories);
+    ]);
+  }, []);
 
-    setIsLoading(false);
-  }, [searchTerm, selectedPlan, selectedCategory]);
+  // ---------- carga principal paginada (respeta filtros actuales) ----------
+  const loadBusinesses = useCallback(
+    async ({ pageToLoad = 0, append = false } = {}) => {
+      if (append && isLoadingMoreRef.current) return;
 
-  // Carga inicial
+      const requestId = append
+        ? requestIdRef.current
+        : ++requestIdRef.current;
+
+      if (append) {
+        isLoadingMoreRef.current = true;
+        setIsLoadingMore(true);
+      } else {
+        isLoadingMoreRef.current = false;
+        setIsLoadingMore(false);
+        setIsLoading(true);
+        setHasMore(false);
+      }
+
+      const { termToFetch, planValueToFetch, categoryValueToFetch } =
+        getCurrentFilters();
+
+      try {
+        if (sortMode === "nearby" && userLoc) {
+          const result = await getBusinessesForNearby(
+            supabase,
+            termToFetch,
+            planValueToFetch,
+            categoryValueToFetch
+          );
+
+          if (requestId !== requestIdRef.current) return;
+
+          const sanitized = (result.data || []).filter(
+            (b) => b?.is_approved === true && b?.is_deleted !== true
+          );
+
+          setBusinesses(sanitized);
+          setTotalBusinesses(sanitized.length);
+          setNearbyVisibleCount(PAGE_SIZE);
+          setHasMore(sanitized.length > PAGE_SIZE);
+          setPage(0);
+          return;
+        }
+
+        const result = await fetchBusinessesFromDb(
+          supabase,
+          termToFetch,
+          planValueToFetch,
+          categoryValueToFetch,
+          { page: pageToLoad, pageSize: PAGE_SIZE }
+        );
+
+        if (requestId !== requestIdRef.current) return;
+
+        const sanitized = (result.data || []).filter(
+          (b) => b?.is_approved === true && b?.is_deleted !== true
+        );
+
+        setBusinesses((current) =>
+          append ? [...current, ...sanitized] : sanitized
+        );
+        setTotalBusinesses(result.count || 0);
+        setHasMore(result.hasMore === true);
+        setPage(pageToLoad);
+      } finally {
+        if (requestId === requestIdRef.current) {
+          setIsLoading(false);
+          setIsLoadingMore(false);
+          isLoadingMoreRef.current = false;
+        }
+      }
+    },
+    [getCurrentFilters, sortMode, userLoc]
+  );
+
+  const loadInitialData = useCallback(() => {
+    loadBusinesses({ pageToLoad: 0, append: false });
+  }, [loadBusinesses]);
+
+  useEffect(() => {
+    loadCategories();
+  }, [loadCategories]);
+
+  // Carga inicial y reinicio al cambiar filtros/orden
   useEffect(() => {
     loadInitialData();
   }, [loadInitialData]);
@@ -380,47 +456,56 @@ const BusinessListPage = () => {
       return withDistance;
     }
 
-    // 2) Default: Premium/Pro arriba, luego Gratis, luego nombre (estable)
-    withDistance.sort((a, b) => {
-      const ra = planRank(a);
-      const rb = planRank(b);
-      if (ra !== rb) return ra - rb;
-      return nameKey(a).localeCompare(nameKey(b), "es");
-    });
-
+    // El modo normal ya llega globalmente ordenado desde Supabase.
     return withDistance;
   }, [businesses, userLoc, sortMode]);
 
   const visibleBusinesses = useMemo(
-    () => businessesForView.slice(0, visibleCount),
-    [businessesForView, visibleCount]
+    () =>
+      sortMode === "nearby"
+        ? businessesForView.slice(0, nearbyVisibleCount)
+        : businessesForView,
+    [businessesForView, nearbyVisibleCount, sortMode]
   );
 
-  useEffect(() => {
-    setVisibleCount(24);
-  }, [searchTerm, selectedPlan, selectedCategory, sortMode]);
+  const loadMoreBusinesses = useCallback(() => {
+    if (!hasMore || isLoadingMoreRef.current) return;
 
-  useEffect(() => {
-    const loadMoreNode = loadMoreRef.current;
+    if (sortMode === "nearby") {
+      setNearbyVisibleCount((current) => {
+        const next = Math.min(current + PAGE_SIZE, totalBusinesses);
+        setHasMore(next < totalBusinesses);
+        return next;
+      });
+      return;
+    }
 
-    if (!loadMoreNode || visibleCount >= businessesForView.length) return;
+    loadBusinesses({ pageToLoad: page + 1, append: true });
+  }, [hasMore, loadBusinesses, page, sortMode, totalBusinesses]);
 
-    const observer = new IntersectionObserver(
+  loadMoreActionRef.current = loadMoreBusinesses;
+
+  const setLoadMoreNode = useCallback((node) => {
+    observerRef.current?.disconnect();
+
+    if (!node) return;
+
+    observerRef.current = new IntersectionObserver(
       ([entry]) => {
-        if (!entry.isIntersecting) return;
-
-        observer.disconnect();
-        setVisibleCount((current) =>
-          Math.min(current + 24, businessesForView.length)
-        );
+        if (entry.isIntersecting) loadMoreActionRef.current?.();
       },
-      { rootMargin: "600px 0px" }
+      { rootMargin: "200px 0px", threshold: 0 }
     );
 
-    observer.observe(loadMoreNode);
+    observerRef.current.observe(node);
+  }, []);
 
-    return () => observer.disconnect();
-  }, [visibleCount, businessesForView.length]);
+  useEffect(
+    () => () => {
+      observerRef.current?.disconnect();
+    },
+    []
+  );
 
   // ---------- render ----------
   return (
@@ -566,7 +651,7 @@ const BusinessListPage = () => {
                   </span>
                 </Button>
                 <div className="flex items-center gap-2 text-sm text-gray-600 whitespace-nowrap min-w-[140px]">
-                  <span>{businessesForView.length} resultados</span>
+                  <span>{totalBusinesses} resultados</span>
                   {sortMode === "nearby" && userLoc && !isLocating && (
                     <span className="inline-flex items-center gap-1 text-green-700">
                       • <span>Ordenado por cercanía</span>
@@ -873,12 +958,17 @@ const BusinessListPage = () => {
                   )}
                 </div>
               ))}
-              {visibleCount < businessesForView.length && (
+              {hasMore && (
                 <div
-                  ref={loadMoreRef}
+                  ref={setLoadMoreNode}
                   className="col-span-full h-1"
                   aria-hidden="true"
                 />
+              )}
+              {isLoadingMore && (
+                <div className="col-span-full py-4 text-center text-sm text-gray-500">
+                  Cargando más negocios…
+                </div>
               )}
             </div>
           )}

@@ -32,19 +32,41 @@ export const updateApprovalStatus = async (supabase, businessId, status) => {
 };
 
 // ---------------- Búsquedas (público) ----------------
-export const searchBusinesses = async (supabase, query, planType, category) => {
-  let q = supabase
-    .from("negocios")
-    .select("*")
-    .eq("is_deleted", false)
-    .eq("is_approved", true);
+export const PUBLIC_BUSINESS_LIST_FIELDS = [
+  "id",
+  "nombre",
+  "slug",
+  "descripcion",
+  "direccion",
+  "portada_url",
+  "imagen_url",
+  "logo_url",
+  "plan_type",
+  "is_approved",
+  "is_deleted",
+  "categoria",
+  "telefono",
+  "hours",
+  "lat",
+  "lng",
+  "plan_rank",
+  "sort_name",
+].join(",");
 
-  if (planType) q = q.eq("plan_type", String(planType).toLowerCase().trim());
-  if (category) q = q.eq("categoria", category);
+const applyPublicBusinessFilters = (q, query, planType, category) => {
+  let filtered = q;
+
+  if (planType) {
+    filtered = filtered.eq(
+      "plan_type",
+      String(planType).toLowerCase().trim()
+    );
+  }
+  if (category) filtered = filtered.eq("categoria", category);
 
   if (query) {
     const p = `%${query}%`;
-    q = q.or(
+    filtered = filtered.or(
       [
         `nombre.ilike.${p}`,
         `descripcion.ilike.${p}`,
@@ -54,14 +76,90 @@ export const searchBusinesses = async (supabase, query, planType, category) => {
     );
   }
 
-  const { data, error } = await q.order("created_at", { ascending: false });
+  return filtered;
+};
+
+export const searchBusinesses = async (
+  supabase,
+  query,
+  planType,
+  category,
+  { page = 0, pageSize = 24 } = {}
+) => {
+  const from = page * pageSize;
+  const to = from + pageSize - 1;
+
+  let q = supabase
+    .from("negocios")
+    .select(PUBLIC_BUSINESS_LIST_FIELDS, { count: "exact" })
+    .eq("is_deleted", false)
+    .eq("is_approved", true);
+
+  q = applyPublicBusinessFilters(q, query, planType, category);
+
+  const { data, error, count } = await q
+    .order("plan_rank", { ascending: true })
+    .order("sort_name", { ascending: true })
+    .order("id", { ascending: true })
+    .range(from, to);
 
   if (error) {
     console.error("Error al buscar negocios:", error);
-    return [];
+    return { data: [], count: 0, hasMore: false, error };
   }
 
-  return data || [];
+  const rows = data || [];
+  const total = count || 0;
+
+  return {
+    data: rows,
+    count: total,
+    hasMore: from + rows.length < total,
+    error: null,
+  };
+};
+
+// "Cerca de mí" necesita el conjunto global para ordenar correctamente por
+// distancia. Se carga únicamente al activar esa función y solo con las columnas
+// mínimas de las tarjetas.
+export const getBusinessesForNearby = async (
+  supabase,
+  query,
+  planType,
+  category
+) => {
+  const batchSize = 1000;
+  const allRows = [];
+
+  for (let from = 0; ; from += batchSize) {
+    let q = supabase
+      .from("negocios")
+      .select(PUBLIC_BUSINESS_LIST_FIELDS)
+      .eq("is_deleted", false)
+      .eq("is_approved", true)
+      .not("lat", "is", null)
+      .not("lng", "is", null);
+
+    q = applyPublicBusinessFilters(q, query, planType, category);
+
+    const { data, error } = await q
+      .order("plan_rank", { ascending: true })
+      .order("sort_name", { ascending: true })
+      .order("id", { ascending: true })
+      .range(from, from + batchSize - 1);
+
+    if (error) {
+      console.error("Error al cargar negocios para cercanía:", error);
+      return { data: [], error };
+    }
+
+    const rows = data || [];
+    allRows.push(...rows);
+
+    if (rows.length < batchSize) break;
+  }
+
+  return { data: allRows, error: null };
 };
 
 // ---------------- Categorías (público) ----------------
