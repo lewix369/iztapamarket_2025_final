@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
+import { Helmet } from "react-helmet";
 import { Link, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
@@ -133,6 +134,16 @@ const HomePage = () => {
 
   return (
     <div className="min-h-screen">
+      <Helmet>
+        <title>IztapaMarket - Directorio Local de Iztapalapa</title>
+        <meta
+          name="description"
+          content="IztapaMarket: el directorio local de Iztapalapa, CDMX. Encuentra restaurantes, tiendas, servicios y negocios cerca de ti con información confiable."
+        />
+        <link rel="canonical" href="https://iztapamarket.com/" />
+        <meta property="og:url" content="https://iztapamarket.com/" />
+      </Helmet>
+
       <section className="relative overflow-hidden bg-gradient-to-br from-blue-600 via-blue-700 to-orange-600 text-white">
         <div className="absolute inset-0 bg-black/20"></div>
         <div className="relative container mx-auto px-4 py-12 md:py-20">

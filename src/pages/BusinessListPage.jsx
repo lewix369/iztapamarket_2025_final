@@ -516,6 +516,8 @@ const BusinessListPage = () => {
           name="description"
           content="Explora todos los negocios registrados en Iztapalapa. Filtra por categoría, plan o nombre en IztapaMarket."
         />
+        <link rel="canonical" href="https://iztapamarket.com/negocios" />
+        <meta property="og:url" content="https://iztapamarket.com/negocios" />
       </Helmet>
 
       <section className="bg-gradient-to-r from-blue-600 to-orange-600 text-white py-16">

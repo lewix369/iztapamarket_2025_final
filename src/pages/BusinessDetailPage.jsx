@@ -31,6 +31,10 @@ const resolvePublicUrl = (pathOrUrl) => {
   // Si ya es URL absoluta, devolver tal cual
   if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
 
+  // Los paths que comienzan con "/" pertenecen a public/ y Vercel los sirve
+  // desde el mismo dominio. No deben convertirse en rutas de Supabase Storage.
+  if (pathOrUrl.startsWith("/")) return pathOrUrl;
+
   try {
     const clean = pathOrUrl.replace(/^\/+/, "");
     const [maybeBucket, ...rest] = clean.split("/");
@@ -962,7 +966,7 @@ const BusinessDetailPage = () => {
   const canonicalUrl = `https://iztapamarket.com/negocio/${business?.slug}`;
 
   // Prefer logo, then portada, then imagen_url; always try to resolve to an absolute URL
-  const seoImage =
+  const resolvedSeoImage =
     optimizeImage(
       resolvePublicUrl(business?.logo_url) ||
         resolvePublicUrl(business?.portada_url) ||
@@ -972,6 +976,9 @@ const BusinessDetailPage = () => {
         business?.imagen_url ||
         ""
     ) || "";
+  const seoImage = resolvedSeoImage.startsWith("/")
+    ? `https://iztapamarket.com${resolvedSeoImage}`
+    : resolvedSeoImage;
 
   const seoTitle = business?.metaTitle || `${business?.nombre} | IztapaMarket`;
   const seoDescription =

@@ -16,8 +16,8 @@ export const createReview = async (supabase, businessId, reviewText) => {
 export const updateApprovalStatus = async (supabase, businessId, status) => {
   const patch =
     status === true
-      ? { is_approved: true, is_deleted: false }
-      : { is_approved: false, is_deleted: true };
+      ? { is_approved: true, is_deleted: false, review_status: "reviewed" }
+      : { is_approved: false, is_deleted: true, review_status: "reviewed" };
 
   const { error } = await supabase
     .from("negocios")
