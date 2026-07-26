@@ -1,17 +1,27 @@
 import React from 'react';
 import { motion } from 'framer-motion';
+import { PLAN_CAPABILITIES } from '@/lib/planCapabilities';
 
 const FeaturesTable = ({ plans }) => {
   const allFeatures = [
     { feature: "Listado en directorio", free: "✓", pro: "✓", premium: "✓" },
-    { feature: "Fotos incluidas", free: "3", pro: "10", premium: "Ilimitadas" },
+    {
+      feature: "Galería de fotos",
+      free: "No incluida",
+      pro: `Hasta ${PLAN_CAPABILITIES.pro.galleryLimit}`,
+      premium: `Hasta ${PLAN_CAPABILITIES.premium.galleryLimit}`,
+    },
+    { feature: "Imagen principal", free: "✓", pro: "✓", premium: "✓" },
+    { feature: "WhatsApp y mapa", free: "✗", pro: "✓", premium: "✓" },
+    { feature: "Redes sociales y sitio web", free: "✗", pro: "✓", premium: "✓" },
+    { feature: "Video", free: "✗", pro: "✗", premium: "✓" },
+    { feature: "Menú para alimentos", free: "✗", pro: "✗", premium: "✓" },
     { feature: "Posición destacada", free: "✗", pro: "✓", premium: "Premium" },
     { feature: "Analytics", free: "✗", pro: "Básicos", premium: "Avanzados" },
-    { feature: "Promociones", free: "✗", pro: "Mensuales", premium: "Ilimitadas" },
+    { feature: "Promociones", free: "✗", pro: "✗", premium: "✓" },
     { feature: "Contenido con IA", free: "✗", pro: "✗", premium: "✓" },
-    { feature: "Integración Mercado Pago", free: "✗", pro: "✗", premium: "✓" },
-    { feature: "Página web incluida", free: "✗", pro: "✗", premium: "✓" },
-    { feature: "Soporte", free: "Email", pro: "Prioritario", premium: "24/7" }
+    { feature: "SEO avanzado", free: "✗", pro: "✗", premium: "✓" },
+    { feature: "Soporte", free: "Estándar", pro: "Prioritario", premium: "Prioritario" }
   ];
   
   return (

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
@@ -62,6 +62,7 @@ const HomePage = () => {
   const navigate = useNavigate();
   const [featuredBusinesses, setFeaturedBusinesses] = useState([]);
   const [heroSearchQuery, setHeroSearchQuery] = useState("");
+  const featuredCarouselRef = useRef(null);
 
   const loadFeaturedBusinesses = useCallback(async () => {
     const data = await getFeaturedBusinesses(supabase);
@@ -74,6 +75,35 @@ const HomePage = () => {
   useEffect(() => {
     loadFeaturedBusinesses();
   }, [loadFeaturedBusinesses]);
+
+  useEffect(() => {
+    const carousel = featuredCarouselRef.current;
+    if (!carousel || featuredBusinesses.length <= 1) return;
+
+    const isDesktop = () =>
+      window.matchMedia("(min-width: 768px)").matches;
+
+    const timer = window.setInterval(() => {
+      if (isDesktop()) return;
+
+      const firstCard = carousel.querySelector("[data-featured-card]");
+      const cardGap = 16;
+      const step = firstCard
+        ? firstCard.getBoundingClientRect().width + cardGap
+        : carousel.clientWidth * 0.82;
+      const maxScrollLeft = carousel.scrollWidth - carousel.clientWidth;
+
+      if (maxScrollLeft <= 0) return;
+
+      const nextLeft = carousel.scrollLeft + step;
+      carousel.scrollTo({
+        left: nextLeft >= maxScrollLeft - 8 ? 0 : nextLeft,
+        behavior: "smooth",
+      });
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, [featuredBusinesses.length]);
 
   const handleHeroSearch = (e) => {
     e.preventDefault();
@@ -105,7 +135,7 @@ const HomePage = () => {
     <div className="min-h-screen">
       <section className="relative overflow-hidden bg-gradient-to-br from-blue-600 via-blue-700 to-orange-600 text-white">
         <div className="absolute inset-0 bg-black/20"></div>
-        <div className="relative container mx-auto px-4 py-20">
+        <div className="relative container mx-auto px-4 py-12 md:py-20">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
             <motion.div
               initial={{ opacity: 0, x: -50 }}
@@ -157,16 +187,28 @@ const HomePage = () => {
                   A 1 km a la redonda
                 </span>
               </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:hidden">
+                <Link to="/registro?plan=free">
+                  <Button className="h-12 w-full rounded-xl bg-orange-500 text-base font-bold text-white shadow-lg hover:bg-orange-600">
+                    Registrar Negocio
+                  </Button>
+                </Link>
+                <Link to="/descargar">
+                  <Button className="h-12 w-full rounded-xl bg-white text-base font-bold text-blue-700 shadow-lg hover:bg-gray-100">
+                    Descargar App
+                  </Button>
+                </Link>
+              </div>
             </motion.div>
             <motion.div
               initial={{ opacity: 0, x: 50 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ duration: 0.8, delay: 0.2 }}
-              className="relative"
+              className="relative hidden lg:block"
             >
               <div className="relative z-10 translate-x-0 lg:translate-x-[-4.5%]">
                 <motion.div
-                  className="relative w-full h-[28rem] flex justify-center items-center rounded-2xl shadow-2xl bg-gradient-to-b from-orange-500 via-orange-500 to-orange-400"
+                  className="relative w-full h-[18rem] sm:h-[22rem] lg:h-[28rem] flex justify-center items-start lg:items-center overflow-hidden rounded-2xl shadow-2xl bg-gradient-to-b from-orange-500 via-orange-500 to-orange-400"
                   animate={{ y: [0, -5, 0] }}
                   transition={{
                     duration: 4,
@@ -188,9 +230,9 @@ const HomePage = () => {
                     </Link>
                   </div>
 
-                  {/* Botones móviles ya existentes (no se tocan) */}
+                  {/* CTA compacto para móvil */}
                   <motion.div
-                    className="absolute bottom-[5%] left-[4%] w-[90%] sm:static sm:w-auto text-center px-4 sm:px-0 lg:hidden"
+                    className="absolute bottom-5 left-1/2 z-20 w-[86%] -translate-x-1/2 text-center lg:hidden"
                     animate={{ y: [0, -5, 0] }}
                     transition={{
                       duration: 4,
@@ -198,9 +240,9 @@ const HomePage = () => {
                       ease: "easeInOut",
                     }}
                   >
-                    <p className="mb-3">
+                    <p className="mb-3 text-white drop-shadow-sm">
                       Registra tu negocio{" "}
-                      <span className="text-blue-800 font-extrabold underline underline-offset-4">
+                      <span className="font-extrabold underline underline-offset-4">
                         GRATIS
                       </span>
                     </p>
@@ -221,7 +263,7 @@ const HomePage = () => {
                   <img
                     src="/iztapamarket-cover.png"
                     alt="Avatar IztapaMarket"
-                    className="h-[90%] object-contain"
+                    className="mt-3 h-[62%] object-contain object-top sm:h-[70%] lg:mt-0 lg:h-[90%]"
                     onError={(e) => {
                       e.currentTarget.onerror = null;
                       e.currentTarget.src = "/iztapamarket-cover.png";
@@ -241,10 +283,22 @@ const HomePage = () => {
           <h2 className="text-2xl font-bold mb-6 text-gray-800">
             Negocios Destacados
           </h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
+          {featuredBusinesses.length > 1 && (
+            <p className="mb-4 text-sm text-gray-500 md:hidden">
+              Desliza hacia los lados para ver más negocios.
+            </p>
+          )}
+          <div
+            ref={featuredCarouselRef}
+            className="flex snap-x snap-mandatory gap-4 overflow-x-auto scroll-smooth px-4 pb-4 md:grid md:grid-cols-3 md:gap-6 md:overflow-visible md:px-0 md:pb-0"
+          >
             {featuredBusinesses.length > 0 ? (
               featuredBusinesses.map((b) => (
-                <Card key={b.slug}>
+                <Card
+                  key={b.slug}
+                  data-featured-card
+                  className="w-[82vw] min-w-[82vw] snap-center shrink-0 md:w-auto md:min-w-0 md:snap-none"
+                >
                   <CardHeader>
                     <div className="relative">
                       <img

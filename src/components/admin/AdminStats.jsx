@@ -3,37 +3,43 @@ import { motion } from "framer-motion";
 import { Card, CardContent } from "@/components/ui/card";
 import { Store, TrendingUp, BarChart3, Users } from "lucide-react";
 
-const AdminStats = ({ businesses }) => {
+const AdminStats = ({ businesses = [], stats }) => {
   const activeBusinesses = businesses.filter((b) => !b.is_deleted);
+  const totals = stats || {
+    total: activeBusinesses.length,
+    premium: activeBusinesses.filter(
+      (b) => String(b.plan_type).toLowerCase() === "premium"
+    ).length,
+    pro: activeBusinesses.filter(
+      (b) => String(b.plan_type).toLowerCase() === "pro"
+    ).length,
+    free: activeBusinesses.filter(
+      (b) => String(b.plan_type).toLowerCase() === "free"
+    ).length,
+  };
 
-  const stats = [
+  const statCards = [
     {
       title: "Total Negocios",
-      value: activeBusinesses.length,
+      value: totals.total,
       icon: Store,
       color: "blue",
     },
     {
       title: "Plan Premium",
-      value: activeBusinesses.filter(
-        (b) => String(b.plan_type).toLowerCase() === "premium"
-      ).length,
+      value: totals.premium,
       icon: TrendingUp,
       color: "orange",
     },
     {
       title: "Plan Pro",
-      value: activeBusinesses.filter(
-        (b) => String(b.plan_type).toLowerCase() === "pro"
-      ).length,
+      value: totals.pro,
       icon: BarChart3,
       color: "blue",
     },
     {
       title: "Plan Free",
-      value: activeBusinesses.filter(
-        (b) => String(b.plan_type).toLowerCase() === "free"
-      ).length,
+      value: totals.free,
       icon: Users,
       color: "gray",
     },
@@ -43,7 +49,7 @@ const AdminStats = ({ businesses }) => {
     <section className="py-12 bg-white">
       <div className="container mx-auto px-4">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          {stats.map((stat, index) => (
+          {statCards.map((stat, index) => (
             <motion.div
               key={stat.title}
               initial={{ opacity: 0, y: 20 }}

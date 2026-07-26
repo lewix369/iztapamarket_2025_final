@@ -20,6 +20,7 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/components/ui/use-toast";
 import { supabase } from "@/lib/supabaseClient";
+import { normalizePlan } from "@/lib/planCapabilities";
 import { Upload } from "lucide-react";
 
 // --- IA helper: invoca la Edge Function generate-description con anon key ---
@@ -108,7 +109,13 @@ const GalleryPreview = ({ images }) => {
   );
 };
 
-const BusinessForm = ({ initialData, onSubmit, onCancel, categoriesList }) => {
+const BusinessForm = ({
+  initialData,
+  onSubmit,
+  onCancel,
+  categoriesList,
+  adminMode = false,
+}) => {
   const { toast } = useToast();
   const [error, setError] = useState(null);
   const [formData, setFormData] = useState({
@@ -357,14 +364,29 @@ const BusinessForm = ({ initialData, onSubmit, onCancel, categoriesList }) => {
     e.preventDefault();
     setError(null);
 
-    // --- Requisitos mínimos comunes ---
-    if (!formData.nombre || !formData.telefono || !formData.direccion) {
+    console.log("🟦 BusinessForm submit", {
+      adminMode,
+      id: initialData?.id,
+      nombre: formData.nombre,
+      telefono: formData.telefono,
+      direccion: formData.direccion,
+    });
+
+    // --- Requisitos mínimos ---
+    // En admin permitimos editar registros importados incompletos; exigir teléfono/dirección
+    // bloquea justamente la corrección de esos campos.
+    if (adminMode) {
+      if (!String(formData.nombre || "").trim()) {
+        setError("El nombre del negocio es obligatorio.");
+        return;
+      }
+    } else if (!formData.nombre || !formData.telefono || !formData.direccion) {
       setError("Nombre, teléfono y dirección son obligatorios.");
       return;
     }
 
     // --- Validación por plan ---
-    const plan_type = (formData.plan_type || "").trim().toLowerCase();
+    const plan_type = normalizePlan(formData.plan_type);
     const {
       instagram,
       facebook,
@@ -376,7 +398,7 @@ const BusinessForm = ({ initialData, onSubmit, onCancel, categoriesList }) => {
       paquete_marketing,
     } = formData;
 
-    if (plan_type === "pro") {
+    if (!adminMode && plan_type === "pro") {
       if (!instagram || !facebook || !logo_url || !mapa_embed_url) {
         setError(
           "Instagram, Facebook, Logo y Mapa son obligatorios en el plan PRO."
@@ -385,7 +407,7 @@ const BusinessForm = ({ initialData, onSubmit, onCancel, categoriesList }) => {
       }
     }
 
-    if (plan_type === "premium") {
+    if (!adminMode && plan_type === "premium") {
       if (
         !instagram ||
         !facebook ||
@@ -446,6 +468,14 @@ const BusinessForm = ({ initialData, onSubmit, onCancel, categoriesList }) => {
 
     // Persistir en localStorage por si se necesita después
     localStorage.setItem("nuevo_negocio", JSON.stringify(normalizedData));
+
+    // En modo admin, no hacemos guardado directo desde BusinessForm.
+    // El panel admin centraliza el update para evitar bloqueos por sesión/RLS
+    // y para mantener una sola ruta de guardado.
+    if (adminMode) {
+      onSubmit(normalizedData);
+      return;
+    }
 
     // --- Usuario actual ---
     const {
@@ -650,16 +680,35 @@ const BusinessForm = ({ initialData, onSubmit, onCancel, categoriesList }) => {
 
   // --- Determinar el plan activo ---
   const searchParams = new URLSearchParams(window.location.search);
-  const plan =
-    formData.plan_type?.toLowerCase() ||
-    searchParams.get("plan")?.toLowerCase() ||
-    "free";
+  const selectedPlan = normalizePlan(
+    formData.plan_type || searchParams.get("plan") || "free"
+  );
+  // Administración ve el formulario completo sin alterar el plan guardado.
+  const plan = adminMode ? "premium" : selectedPlan;
 
   return (
     <form
       onSubmit={handleSubmit}
       className="space-y-4 max-h-[80vh] overflow-y-auto p-4"
     >
+      {adminMode && (
+        <>
+          <LabeledInput
+            label="Imagen asignada al negocio"
+            name="imagen_url"
+            value={formData.imagen_url}
+            onChange={handleChange}
+            placeholder="Ruta o URL de la imagen existente"
+          />
+          {formData.imagen_url && (
+            <ImagePreview
+              url={formData.imagen_url}
+              label="Vista previa de la imagen asignada"
+            />
+          )}
+        </>
+      )}
+
       {/* Campos por plan */}
       {plan === "free" && (
         <>
@@ -1245,7 +1294,11 @@ const BusinessForm = ({ initialData, onSubmit, onCancel, categoriesList }) => {
         <Button type="button" variant="outline" onClick={onCancel}>
           Cancelar
         </Button>
-        <Button type="submit" className="bg-blue-600 hover:bg-blue-700">
+        <Button
+          type="button"
+          onClick={handleSubmit}
+          className="bg-blue-600 hover:bg-blue-700"
+        >
           {initialData ? "Actualizar" : "Agregar"} Negocio
         </Button>
       </div>

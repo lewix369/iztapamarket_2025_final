@@ -30,6 +30,8 @@ supabase/functions/**/.env
 *.log
 logs/
 backend.log
+geocodificacion*.log.json
+reports/denue/
 
 # envs
 .env
@@ -40,6 +42,7 @@ backend.log
 
 # IztapaMarket – backups y scripts que no van a producción
 *.bak.*
+*.bak-admin-*
 *.tmp
 audit/
 server.mjs.bak.*

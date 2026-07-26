@@ -10,6 +10,10 @@ import { Toaster } from "@/components/ui/toaster";
 import { FaInstagram, FaFacebook, FaGlobe } from "react-icons/fa";
 import { FaTiktok } from "react-icons/fa6";
 import TransportButtons from "@/components/TransportButtons";
+import {
+  getPlanCapabilities,
+  normalizePlan,
+} from "@/lib/planCapabilities";
 
 /* ---------------------- Optimización de imágenes ---------------------- */
 /** Devuelve la URL tal cual, sin transformaciones que rompan en local o en Supabase */
@@ -317,8 +321,13 @@ const BusinessDetailPage = () => {
   const [plan, setPlan] = useState(null);
   const [showPromo, setShowPromo] = useState(false);
   const [promociones, setPromociones] = useState([]);
+  const [coverImageFailed, setCoverImageFailed] = useState(false);
 
   const { toast } = useToast();
+
+  useEffect(() => {
+    setCoverImageFailed(false);
+  }, [business?.id, business?.portada_url]);
 
   // === Reemplazo suave de window.alert por toast (solo mientras esta página está montada)
   const originalAlertRef = React.useRef(window.alert);
@@ -388,8 +397,7 @@ const BusinessDetailPage = () => {
         setBusiness(null);
       } else {
         // Normaliza plan
-        let normalizedPlan = (data?.plan_type || "").toLowerCase().trim();
-        if (normalizedPlan === "pro") normalizedPlan = "profesional";
+        const normalizedPlan = normalizePlan(data?.plan_type);
 
         // Normaliza galería (acepta string[], {publicUrl|url|path}[])
         const galleryField = data?.gallery_images;
@@ -943,8 +951,9 @@ const BusinessDetailPage = () => {
     );
   };
 
+  const planCapabilities = getPlanCapabilities(plan);
   const shouldShowMenu =
-    (plan === "premium" || plan === "profesional") && isFoodCategory && hasMenu;
+    planCapabilities.menu && isFoodCategory && hasMenu;
 
   // URL segura para el logo
   const logoSrc = resolvePublicUrl(business?.logo_url);
@@ -1029,7 +1038,7 @@ const BusinessDetailPage = () => {
           )}
           <h1 className="text-4xl font-bold mb-2">{business.nombre}</h1>
           <Badge variant="outline">{prettyCategory(business.categoria)}</Badge>
-          {plan === "profesional" && (
+          {plan === "pro" && (
             <Badge className="bg-blue-100 text-blue-800 border border-blue-300 ml-2">
               Profesional
             </Badge>
@@ -1067,26 +1076,26 @@ const BusinessDetailPage = () => {
           </p>
         )}
 
-        {business.portada_url && (
-          <div className="mt-8 mb-6">
-            <img
+          {business.portada_url && !coverImageFailed && (
+            <div className="mt-8 mb-6">
+              <img
               src={
                 resolvePublicUrl(business.portada_url) || business.portada_url
               }
               alt="Portada del negocio"
               className="w-full rounded-lg object-cover max-h-[450px] md:max-h-[350px] sm:max-h-[260px]"
-              width="1600"
-              height="600"
-              loading="lazy"
-              decoding="async"
-            />
-          </div>
-        )}
+                width="1600"
+                height="600"
+                loading="lazy"
+                decoding="async"
+                onError={() => setCoverImageFailed(true)}
+              />
+            </div>
+          )}
 
         {/* Galería con Lightbox */}
         {(() => {
-          const galleryLimit =
-            plan === "premium" ? 6 : plan === "profesional" ? 3 : 0;
+          const galleryLimit = planCapabilities.galleryLimit;
 
           const hasGallery =
             Array.isArray(business.gallery_images) &&
@@ -1130,6 +1139,11 @@ const BusinessDetailPage = () => {
               <p className="text-sm text-gray-500 pl-1 mb-1">
                 Dirección: {business.direccion}
               </p>
+              {business.hours && (
+                <p className="text-sm text-gray-500 pl-1 mb-1">
+                  🕒 Horarios: {business.hours}
+                </p>
+              )}
               <p className="text-sm text-gray-500 pl-1">
                 Teléfono: {business.telefono}
               </p>
@@ -1171,7 +1185,7 @@ const BusinessDetailPage = () => {
                 </p>
               )}
 
-            {business?.plan_type === "premium" && business.video_embed_url && (
+            {planCapabilities.video && business.video_embed_url && (
               <div className="my-6">
                 <h3 className="text-xl font-semibold mb-2">Video</h3>
                 <div className="aspect-w-16 aspect-h-9">
@@ -1304,7 +1318,7 @@ const BusinessDetailPage = () => {
           </>
         )}
 
-        {plan === "profesional" && (
+        {plan === "pro" && (
           <>
             {business.imagen_url && (
               <img
@@ -1449,9 +1463,9 @@ const BusinessDetailPage = () => {
 
         {plan === "premium" && (
           <div className="bg-green-50 border-l-4 border-green-500 text-green-800 p-4 rounded mt-10">
-            Este negocio cuenta con un plan <strong>Premium</strong>. Disfruta
-            de todos los beneficios: video, contacto directo, redes sociales y
-            más.
+            Este negocio cuenta con un plan <strong>Premium</strong>. La
+            información mostrada corresponde a los datos proporcionados por el
+            negocio.
           </div>
         )}
       </div>

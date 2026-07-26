@@ -43,11 +43,13 @@ import {
 import { useToast } from "@/components/ui/use-toast";
 
 import {
-  getBusinesses as fetchAllBusinesses,
   createBusiness,
   updateBusiness,
   updateApprovalStatus,
   getDistinctCategories,
+  getAdminBusinessStats,
+  searchAdminBusinesses,
+  getAdminBusinessById,
 } from "@/lib/database";
 
 import AdminStats from "@/components/admin/AdminStats";
@@ -97,9 +99,13 @@ const AdminPage = () => {
   }, []);
 
   // ---- Estado general
-  const [allBusinesses, setAllBusinesses] = useState([]);
   const [filteredBusinesses, setFilteredBusinesses] = useState([]);
+  const [adminStats, setAdminStats] = useState(null);
+  const [totalBusinesses, setTotalBusinesses] = useState(0);
+  const [currentPage, setCurrentPage] = useState(0);
+  const pageSize = 50;
   const [searchTerm, setSearchTerm] = useState("");
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState("");
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState("all");
   const [selectedPlanFilter, setSelectedPlanFilter] = useState("all");
   const [selectedStatusFilter, setSelectedStatusFilter] = useState("all");
@@ -107,35 +113,6 @@ const AdminPage = () => {
   const [editingBusiness, setEditingBusiness] = useState(null);
   const [allCategories, setAllCategories] = useState([]);
   const { toast } = useToast();
-
-  // ---- Aprobación rápida
-  const [negocios, setNegocios] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [busqueda, setBusqueda] = useState("");
-
-  const fetchNegocios = useCallback(async () => {
-    setLoading(true);
-    const { data, error } = await supabase
-      .from("negocios")
-      .select("id,nombre,slug,categoria,is_approved,is_deleted,created_at")
-      .order("created_at", { ascending: false });
-
-    if (error) console.error("Error al cargar negocios:", error.message);
-    setNegocios(data || []);
-    setLoading(false);
-  }, []);
-
-  useEffect(() => {
-    fetchNegocios();
-  }, [fetchNegocios]);
-
-  const listaFiltrada = negocios.filter((n) =>
-    [n.nombre, n.categoria, n.slug].some((v) =>
-      String(v || "")
-        .toLowerCase()
-        .includes(busqueda.toLowerCase())
-    )
-  );
 
   const planOptions = [
     { value: "all", label: "Todos los planes" },
@@ -152,110 +129,77 @@ const AdminPage = () => {
     { value: "eliminado", label: "Eliminado" },
   ];
 
-  // ---- Carga inicial
-  const loadInitialData = useCallback(async () => {
-    const [allBusinessesDataRaw, categoriesData] = await Promise.all([
-      fetchAllBusinesses(supabase),
+  // ---- Resumen estable: no se repite al buscar o cambiar de página
+  const loadOverviewData = useCallback(async () => {
+    const [statsData, categoriesData] = await Promise.all([
+      getAdminBusinessStats(supabase),
       getDistinctCategories(supabase),
     ]);
 
-    const allBusinessesData = (allBusinessesDataRaw || []).map((biz) => ({
-      ...biz,
-      is_approved:
-        typeof biz.is_approved === "boolean"
-          ? biz.is_approved
-          : typeof biz.status === "boolean"
-          ? biz.status
-          : biz.estado
-          ? String(biz.estado).toLowerCase() === "aprobado"
-          : null,
-    }));
-
-    setAllBusinesses(allBusinessesData);
+    setAdminStats(statsData);
     setAllCategories(["all", ...Array.from(new Set(categoriesData))]);
   }, []);
 
-  useEffect(() => {
-    loadInitialData();
-  }, [loadInitialData]);
+  // ---- Página visible: esta es la única lista de negocios del administrador
+  const loadBusinessPage = useCallback(async () => {
+    const pageData = await searchAdminBusinesses(supabase, {
+      search: debouncedSearchTerm,
+      category: selectedCategoryFilter,
+      plan: selectedPlanFilter,
+      status: selectedStatusFilter,
+      page: currentPage,
+      pageSize,
+    });
 
-  // ---- Filtros
-  const applyFilters = useCallback(() => {
-    let businessesToFilter = [...allBusinesses];
+    const allBusinessesData = (pageData.data || []).map((biz) => ({
+      ...biz,
+      is_approved:
+        typeof biz.is_approved === "boolean" ? biz.is_approved : null,
+    }));
 
-    if (searchTerm) {
-      const lowercasedTerm = searchTerm.toLowerCase();
-      businessesToFilter = businessesToFilter.filter(
-        (business) =>
-          business.nombre.toLowerCase().includes(lowercasedTerm) ||
-          business.categoria.toLowerCase().includes(lowercasedTerm)
-      );
-    }
-
-    if (selectedCategoryFilter !== "all") {
-      businessesToFilter = businessesToFilter.filter(
-        (business) =>
-          business.categoria?.toLowerCase().trim() ===
-          selectedCategoryFilter.toLowerCase().trim()
-      );
-    }
-
-    if (selectedPlanFilter !== "all") {
-      businessesToFilter = businessesToFilter.filter(
-        (business) =>
-          business.plan_type?.toLowerCase().trim() ===
-          selectedPlanFilter.toLowerCase().trim()
-      );
-    }
-
-    if (selectedStatusFilter === "approved") {
-      businessesToFilter = businessesToFilter.filter(
-        (business) =>
-          business.is_approved === true && business.is_deleted !== true
-      );
-    } else if (selectedStatusFilter === "rejected") {
-      businessesToFilter = businessesToFilter.filter(
-        (business) =>
-          business.is_approved === false && business.is_deleted !== true
-      );
-    } else if (selectedStatusFilter === "pending") {
-      businessesToFilter = businessesToFilter.filter(
-        (business) =>
-          business.is_approved === null && business.is_deleted !== true
-      );
-    } else if (selectedStatusFilter === "eliminado") {
-      businessesToFilter = businessesToFilter.filter(
-        (business) => business.is_deleted === true
-      );
-    } else {
-      businessesToFilter = businessesToFilter.filter(
-        (business) => business.is_deleted !== true
-      );
-    }
-
-    setFilteredBusinesses(businessesToFilter);
+    setFilteredBusinesses(allBusinessesData);
+    setTotalBusinesses(pageData.count || 0);
   }, [
-    allBusinesses,
-    searchTerm,
+    debouncedSearchTerm,
+    selectedCategoryFilter,
+    selectedPlanFilter,
+    selectedStatusFilter,
+    currentPage,
+  ]);
+
+  useEffect(() => {
+    loadOverviewData();
+  }, [loadOverviewData]);
+
+  useEffect(() => {
+    loadBusinessPage();
+  }, [loadBusinessPage]);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedSearchTerm(searchTerm);
+    }, 300);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [searchTerm]);
+
+  useEffect(() => {
+    setCurrentPage(0);
+  }, [
+    debouncedSearchTerm,
     selectedCategoryFilter,
     selectedPlanFilter,
     selectedStatusFilter,
   ]);
 
-  useEffect(() => {
-    applyFilters();
-  }, [applyFilters, allBusinesses]);
-
   const refreshData = async () => {
-    await loadInitialData();
-    setSearchTerm("");
-    setSelectedStatusFilter("all");
+    await Promise.all([loadOverviewData(), loadBusinessPage()]);
   };
 
   // ---- Crear/Editar
   const handleFormSubmit = async (formData) => {
     // Normalizar arrays desde el formulario
-    const serviciosArr = toStringArray(formData.servicios);
+    const serviciosArr = toStringArray(formData.services);
     const galleryArr = toStringArray(formData.gallery_images);
 
     // Video → embed
@@ -274,13 +218,22 @@ const AdminPage = () => {
       descripcion: formData.descripcion,
       direccion: formData.direccion,
       telefono: formData.telefono,
+      whatsapp: formData.whatsapp,
       categoria: formData.categoria,
-      seo_keywords: formData.keywords,
+      hours: formData.hours,
+      imagen_url: formData.imagen_url,
+      portada_url: formData.portada_url,
+      logo_url: formData.logo_url,
+      web: formData.web,
+      facebook: formData.facebook,
+      instagram: formData.instagram,
+      mapa_embed_url: formData.mapa_embed_url,
+      menu: formData.menu,
+      seo_keywords: formData.seo_keywords,
       is_featured: !!formData.is_featured,
-      ...(serviciosArr.length > 0 && { servicios: serviciosArr }),
+      ...(serviciosArr.length > 0 && { services: serviciosArr }),
       ...(galleryArr.length > 0 && { gallery_images: galleryArr }),
       ...(video_embed_url && { video_embed_url }),
-      ...(formData.menu && { menu: formData.menu }),
     });
 
     // UPDATE: por seguridad NO enviamos arrays aquí (aislamos el 400)
@@ -289,16 +242,27 @@ const AdminPage = () => {
       descripcion: formData.descripcion,
       direccion: formData.direccion,
       telefono: formData.telefono,
+      whatsapp: formData.whatsapp,
       categoria: formData.categoria,
-      seo_keywords: formData.keywords,
+      hours: formData.hours,
+      imagen_url: formData.imagen_url,
+      portada_url: formData.portada_url,
+      logo_url: formData.logo_url,
+      web: formData.web,
+      facebook: formData.facebook,
+      instagram: formData.instagram,
+      mapa_embed_url: formData.mapa_embed_url,
+      menu: formData.menu,
+      seo_keywords: formData.seo_keywords,
       is_featured: !!formData.is_featured,
+      ...(serviciosArr.length > 0 && { services: serviciosArr }),
+      ...(galleryArr.length > 0 && { gallery_images: galleryArr }),
       ...(video_embed_url && { video_embed_url }),
-      ...(formData.menu && { menu: formData.menu }),
     });
 
     try {
       if (editingBusiness) {
-        console.log("🟡 PATCH payload (sin arrays):", baseUpdate);
+        console.log("🟡 PATCH payload:", baseUpdate);
         await updateBusiness(supabase, editingBusiness.id, baseUpdate);
 
         // TODO (opcional): si más adelante quieres permitir editar arrays,
@@ -346,8 +310,9 @@ const AdminPage = () => {
     }
   };
 
-  const handleEdit = (business) => {
-    setEditingBusiness(business);
+  const handleEdit = async (business) => {
+    const fullBusiness = await getAdminBusinessById(supabase, business.id);
+    setEditingBusiness(fullBusiness || business);
     setIsFormOpen(true);
   };
 
@@ -360,19 +325,6 @@ const AdminPage = () => {
       );
 
       // UI optimista
-      setAllBusinesses((prev) =>
-        prev.map((n) =>
-          n.id === id
-            ? {
-                ...n,
-                is_approved: approved,
-                status: approved,
-                estado: approved ? "aprobado" : "rechazado",
-                is_deleted: approved ? false : n.is_deleted,
-              }
-            : n
-        )
-      );
       setFilteredBusinesses((prev) =>
         Array.isArray(prev)
           ? prev.map((n) =>
@@ -388,24 +340,9 @@ const AdminPage = () => {
             )
           : prev
       );
-      setNegocios((prev) =>
-        prev.map((n) =>
-          n.id === id
-            ? {
-                ...n,
-                is_approved: approved,
-                is_deleted: approved ? false : n.is_deleted,
-              }
-            : n
-        )
-      );
-
       const { error } = await updateApprovalStatus(supabase, id, approved);
       if (error) {
         // rollback
-        setAllBusinesses((prev) =>
-          prev.map((n) => (n.id === id ? { ...n, is_approved: !approved } : n))
-        );
         setFilteredBusinesses((prev) =>
           Array.isArray(prev)
             ? prev.map((n) =>
@@ -413,10 +350,6 @@ const AdminPage = () => {
               )
             : prev
         );
-        setNegocios((prev) =>
-          prev.map((n) => (n.id === id ? { ...n, is_approved: !approved } : n))
-        );
-
         toast({
           title: "❌ Error",
           description:
@@ -433,7 +366,7 @@ const AdminPage = () => {
           : "El negocio ha sido marcado como rechazado.",
       });
 
-      await Promise.all([fetchNegocios(), refreshData()]);
+      await refreshData();
     } catch (err) {
       console.error("toggle approval error:", err);
       toast({
@@ -465,7 +398,7 @@ const AdminPage = () => {
       title: "🗑️ Eliminado",
       description: "El negocio ha sido eliminado.",
     });
-    await Promise.all([fetchNegocios(), refreshData()]);
+    await refreshData();
   };
 
   if (!authorized) return null;
@@ -500,80 +433,9 @@ const AdminPage = () => {
           </div>
         </motion.div>
 
-        <AdminStats
-          businesses={allBusinesses.map((biz) => ({
-            ...biz,
-            plan_type: biz.plan_type?.toLowerCase().trim(),
-          }))}
-        />
+        <AdminStats stats={adminStats} />
 
-        {/* Aprobación rápida */}
-        <Card className="mt-8">
-          <CardContent className="p-6">
-            <div className="flex flex-col md:flex-row items-center gap-3 mb-4">
-              <Input
-                placeholder="Buscar negocio..."
-                value={busqueda}
-                onChange={(e) => setBusqueda(e.target.value)}
-                className="w-full md:w-80"
-              />
-              <Button
-                variant="secondary"
-                onClick={fetchNegocios}
-                disabled={loading}
-              >
-                {loading ? "Actualizando..." : "Refrescar"}
-              </Button>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {(listaFiltrada.length ? listaFiltrada : negocios).map((n) => (
-                <Card key={n.id} className="border">
-                  <CardContent className="p-4 flex flex-col gap-3">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="font-semibold">{n.nombre}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {n.categoria} · {n.slug}
-                        </p>
-                      </div>
-                      {n.is_approved ? (
-                        <span className="px-2 py-1 text-xs rounded bg-green-100 text-green-700">
-                          Aprobado
-                        </span>
-                      ) : (
-                        <span className="px-2 py-1 text-xs rounded bg-gray-100 text-gray-700">
-                          Pendiente/Rechazado
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="flex gap-2">
-                      <Button
-                        onClick={() => doToggleApproval(n.id, true, "rapido")}
-                        disabled={n.is_approved === true}
-                        className="bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-50"
-                      >
-                        Aprobar
-                      </Button>
-
-                      <Button
-                        onClick={() => doToggleApproval(n.id, false, "rapido")}
-                        disabled={n.is_approved === false}
-                        variant="destructive"
-                        className="text-white disabled:opacity-50"
-                      >
-                        Rechazar
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Filtros + Tabla */}
+        {/* Filtros + única lista paginada */}
         <Card className="mt-8">
           <CardContent className="p-6">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
@@ -649,6 +511,12 @@ const AdminPage = () => {
                     {editingBusiness
                       ? "Modifica la información del negocio"
                       : "Completa la información del nuevo negocio"}
+                    {editingBusiness ? (
+                      <span className="mt-2 block text-xs text-gray-500">
+                        slug: {editingBusiness.slug || "—"} · id:{" "}
+                        {editingBusiness.id}
+                      </span>
+                    ) : null}
                   </DialogDescription>
                 </DialogHeader>
 
@@ -657,6 +525,7 @@ const AdminPage = () => {
                   editingBusiness
                 )}
                 <BusinessForm
+                  adminMode
                   initialData={
                     editingBusiness
                       ? {
@@ -734,13 +603,37 @@ const AdminPage = () => {
             </Dialog>
 
             {filteredBusinesses.length > 0 ? (
-              <AdminBusinessTable
-                businesses={filteredBusinesses}
-                onApprove={handleApprove}
-                onReject={handleReject}
-                onDelete={handleSoftDelete}
-                onEdit={handleEdit}
-              />
+              <>
+                <div className="mb-4 flex flex-col gap-2 text-sm text-gray-600 sm:flex-row sm:items-center sm:justify-between">
+                  <span>
+                    Mostrando {filteredBusinesses.length} de {totalBusinesses} negocios
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      disabled={currentPage === 0}
+                      onClick={() => setCurrentPage((page) => Math.max(0, page - 1))}
+                    >
+                      Anterior
+                    </Button>
+                    <span>Página {currentPage + 1}</span>
+                    <Button
+                      variant="outline"
+                      disabled={(currentPage + 1) * pageSize >= totalBusinesses}
+                      onClick={() => setCurrentPage((page) => page + 1)}
+                    >
+                      Siguiente
+                    </Button>
+                  </div>
+                </div>
+                <AdminBusinessTable
+                  businesses={filteredBusinesses}
+                  onApprove={handleApprove}
+                  onReject={handleReject}
+                  onDelete={handleSoftDelete}
+                  onEdit={handleEdit}
+                />
+              </>
             ) : (
               <div className="text-center py-16">
                 <Store className="h-16 w-16 text-gray-300 mx-auto mb-4" />

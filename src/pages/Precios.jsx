@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/use-toast";
+import { PLAN_CAPABILITIES } from "@/lib/planCapabilities";
 
 const Precios = () => {
   const { toast } = useToast();
@@ -53,7 +54,7 @@ const Precios = () => {
         "Número de teléfono",
         "1 imagen principal",
         "Categoría del negocio",
-        "Horarios básicos",
+        "Horarios cuando estén confirmados",
         "Descripción corta (100 caracteres)",
       ],
       limitations: [
@@ -75,17 +76,21 @@ const Precios = () => {
       popular: true,
       features: [
         "Todo lo del plan Free",
-        "Hasta 5 fotografías",
+        `Hasta ${PLAN_CAPABILITIES.pro.galleryLimit} fotografías de galería`,
+        "Logo y portada del negocio",
+        "Botón de WhatsApp y sitio web",
         "Enlaces a redes sociales",
         "Horarios detallados",
         "Mapa integrado de Google",
         "Lista de servicios",
         "Estadísticas básicas",
-        "Promociones mensuales",
         "Descripción extendida (500 caracteres)",
-        "Logo del negocio",
       ],
-      limitations: ["Sin video corto del negocio", "Sin sitio web básico", "Soporte por email"],
+      limitations: [
+        "Sin video corto del negocio",
+        "Sin menú ni promociones",
+        "Sin herramientas de IA",
+      ],
     },
     {
       name: "Premium",
@@ -100,19 +105,17 @@ const Precios = () => {
       features: [
         "Todo lo del plan Profesional",
         "Video corto del negocio (grabado en tu local)",
-        "Multimedia ilimitado",
+        `Hasta ${PLAN_CAPABILITIES.premium.galleryLimit} fotografías de galería`,
+        "Menú para negocios de alimentos",
+        "Promociones destacadas",
         "Orientación y acompañamiento digital",
         "Optimización SEO avanzada",
-        "Página web básica (landing de 1 página)",
-        "Incluye tus datos, fotos y contacto alojados por IztapaMarket",
+        "Sitio web y datos de contacto",
         "Integración con redes sociales",
         "Crear logo con IA (incluido)",
         "Crear portada con IA (incluido)",
-        "Estadísticas avanzadas",
+        "Estadísticas de visitas y clics",
         "Soporte directo por WhatsApp",
-        "Promociones ilimitadas",
-        "Insignia de 'Destacado'",
-        "Aparición en página principal",
         "Prioridad en búsquedas",
       ],
       limitations: [],

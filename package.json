@@ -18,7 +18,9 @@
     "start": "npm run dev",
     "dev:clean": "pkill -f 'vercel dev' || true && pkill -f vite || true && npx vercel dev --listen=3003",
     "gen:sitemap:sandbox": "dotenv -e .env.sandbox -- node scripts/generate-sitemap.mjs",
-    "gen:sitemap:prod": "dotenv -e .env.production -- node scripts/generate-sitemap.mjs"
+    "gen:sitemap:prod": "dotenv -e .env.production -- node scripts/generate-sitemap.mjs",
+    "denue:auditar": "DOTENV_CONFIG_PATH=.env.local node -r dotenv/config scripts/denue/auditar-iztapalapa.mjs",
+    "denue:comparar": "DOTENV_CONFIG_PATH=.env.local node -r dotenv/config scripts/denue/comparar-candidatos.mjs"
   },
   "dependencies": {
     "@mercadopago/sdk-react": "^1.0.6",

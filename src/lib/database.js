@@ -163,25 +163,43 @@ export const getBusinessesForNearby = async (
 };
 
 // ---------------- Categorías (público) ----------------
+// La función SQL devuelve únicamente los valores distintos. El resultado se
+// comparte entre páginas para no repetir la misma consulta durante la sesión.
+let distinctCategoriesCache = null;
+let distinctCategoriesRequest = null;
+
 export const getDistinctCategories = async (supabase) => {
-  const { data, error } = await supabase
-    .from("negocios")
-    .select("categoria")
-    .eq("is_deleted", false)
-    .eq("is_approved", true);
+  if (distinctCategoriesCache) return distinctCategoriesCache;
+  if (distinctCategoriesRequest) return distinctCategoriesRequest;
 
-  if (error) {
-    console.error("Error al obtener categorías distintas:", error);
-    return [];
+  distinctCategoriesRequest = (async () => {
+    const { data, error } = await supabase.rpc(
+      "get_distinct_business_categories"
+    );
+
+    if (error) {
+      console.error("Error al obtener categorías distintas:", error);
+      return [];
+    }
+
+    distinctCategoriesCache = (data || [])
+      .map((row) =>
+        String(
+          typeof row === "string" ? row : row?.categoria || ""
+        )
+          .toLowerCase()
+          .trim()
+      )
+      .filter(Boolean);
+
+    return distinctCategoriesCache;
+  })();
+
+  try {
+    return await distinctCategoriesRequest;
+  } finally {
+    distinctCategoriesRequest = null;
   }
-
-  return [
-    ...new Set(
-      (data || [])
-        .map((r) => (r?.categoria || "").toLowerCase().trim())
-        .filter(Boolean)
-    ),
-  ];
 };
 
 // ---------------- Crear / Actualizar / Eliminar ----------------
@@ -240,13 +258,164 @@ export const getFeaturedBusinesses = async (supabase) => {
     .select("*")
     .eq("is_deleted", false)
     .eq("is_approved", true)
-    .eq("is_featured", true);
+    .eq("is_featured", true)
+    .order("plan_rank", { ascending: true })
+    .order("sort_name", { ascending: true })
+    .limit(8);
 
   if (error) console.error("Error al obtener negocios destacados:", error);
-  return data || [];
+
+  const featured = data || [];
+  if (featured.length >= 4) return featured;
+
+  const { data: fallbackData, error: fallbackError } = await supabase
+    .from("negocios")
+    .select("*")
+    .eq("is_deleted", false)
+    .eq("is_approved", true)
+    .order("plan_rank", { ascending: true })
+    .order("sort_name", { ascending: true })
+    .limit(8);
+
+  if (fallbackError) {
+    console.error("Error al completar negocios destacados:", fallbackError);
+    return featured;
+  }
+
+  const seen = new Set(featured.map((b) => b.id));
+  const fallback = (fallbackData || []).filter((b) => !seen.has(b.id));
+  return [...featured, ...fallback].slice(0, 8);
 };
 
 // ---------------- Listados (admin/KPIs) ----------------
+const ADMIN_BUSINESS_FIELDS = [
+  "id",
+  "nombre",
+  "slug",
+  "categoria",
+  "plan_type",
+  "is_approved",
+  "is_deleted",
+  "telefono",
+  "created_at",
+].join(",");
+
+const applyAdminBusinessFilters = (q, { search, category, plan, status }) => {
+  let filtered = q;
+
+  if (search?.trim()) {
+    const p = `%${search.trim()}%`;
+    filtered = filtered.or(
+      [`nombre.ilike.${p}`, `categoria.ilike.${p}`, `slug.ilike.${p}`].join(
+        ","
+      )
+    );
+  }
+
+  if (category && category !== "all") {
+    filtered = filtered.eq("categoria", category);
+  }
+
+  if (plan && plan !== "all") {
+    filtered = filtered.eq("plan_type", String(plan).toLowerCase().trim());
+  }
+
+  if (status === "approved") {
+    filtered = filtered.eq("is_approved", true).eq("is_deleted", false);
+  } else if (status === "rejected") {
+    filtered = filtered.eq("is_approved", false).eq("is_deleted", false);
+  } else if (status === "pending") {
+    filtered = filtered.is("is_approved", null).eq("is_deleted", false);
+  } else if (status === "eliminado") {
+    filtered = filtered.eq("is_deleted", true);
+  } else {
+    filtered = filtered.eq("is_deleted", false);
+  }
+
+  return filtered;
+};
+
+const countAdminBusinesses = async (supabase, filters) => {
+  let q = supabase
+    .from("negocios")
+    .select("id", { count: "exact", head: true });
+
+  q = applyAdminBusinessFilters(q, filters);
+
+  const { count, error } = await q;
+  if (error) {
+    console.error("Error al contar negocios admin:", error);
+    return 0;
+  }
+
+  return count || 0;
+};
+
+export const getAdminBusinessStats = async (supabase) => {
+  const [total, free, premium, pro] = await Promise.all([
+    countAdminBusinesses(supabase, { status: "all" }),
+    countAdminBusinesses(supabase, { status: "all", plan: "free" }),
+    countAdminBusinesses(supabase, { status: "all", plan: "premium" }),
+    countAdminBusinesses(supabase, { status: "all", plan: "pro" }),
+  ]);
+
+  return { total, free, premium, pro };
+};
+
+export const getAdminBusinessById = async (supabase, id) => {
+  const { data, error } = await supabase
+    .from("negocios")
+    .select("*")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (error) {
+    console.error("Error al obtener negocio completo admin:", error);
+    return null;
+  }
+
+  return data || null;
+};
+
+export const searchAdminBusinesses = async (
+  supabase,
+  {
+    search = "",
+    category = "all",
+    plan = "all",
+    status = "all",
+    page = 0,
+    pageSize = 50,
+  } = {}
+) => {
+  const safePage = Math.max(0, Number(page) || 0);
+  const safePageSize = Math.max(1, Number(pageSize) || 50);
+  const from = safePage * safePageSize;
+  const to = from + safePageSize - 1;
+
+  let q = supabase
+    .from("negocios")
+    .select(ADMIN_BUSINESS_FIELDS, { count: "exact" });
+
+  q = applyAdminBusinessFilters(q, { search, category, plan, status });
+
+  const { data, error, count } = await q
+    .order("created_at", { ascending: false })
+    .range(from, to);
+
+  if (error) {
+    console.error("Error al buscar negocios admin:", error);
+    return { data: [], count: 0, page: safePage, pageSize: safePageSize };
+  }
+
+  return {
+    data: data || [],
+    count: count || 0,
+    page: safePage,
+    pageSize: safePageSize,
+  };
+};
+
 export const getBusinesses = async (supabase) => {
   const { data, error } = await supabase
     .from("negocios")
@@ -260,7 +429,8 @@ export const getBusinesses = async (supabase) => {
   return data || [];
 };
 
-// 🔧 UPDATE robusto: return=minimal + select aparte + logs claros
+// 🔧 UPDATE estricto: exige que Supabase devuelva la fila actualizada.
+// Si RLS, ID equivocado o alguna regla impide actualizar, no mostramos éxito falso.
 export const updateBusiness = async (supabase, businessId, updatedData) => {
   const payload = { ...updatedData };
   delete payload.id;
@@ -269,10 +439,12 @@ export const updateBusiness = async (supabase, businessId, updatedData) => {
 
   console.log("▶️ PATCH negocios", { id: businessId, payload });
 
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("negocios")
     .update({ ...payload, updated_at: new Date().toISOString() })
-    .eq("id", businessId); // return=minimal por defecto
+    .eq("id", businessId)
+    .select("*")
+    .single();
 
   if (error) {
     console.error("❌ PostgREST UPDATE error", {
@@ -285,19 +457,24 @@ export const updateBusiness = async (supabase, businessId, updatedData) => {
     throw error;
   }
 
-  const { data, error: fetchError } = await supabase
-    .from("negocios")
-    .select("*")
-    .eq("id", businessId)
-    .single();
-
-  if (fetchError) {
-    console.warn(
-      "⚠️ Update OK, pero falló el SELECT de confirmación:",
-      fetchError
+  if (!data?.id) {
+    const noRowError = new Error(
+      "Supabase no devolvió ninguna fila actualizada. Puede ser RLS, ID incorrecto o una regla de permisos."
     );
-    return { id: businessId, ...payload };
+    console.error("❌ UPDATE sin fila confirmada", {
+      id: businessId,
+      payload,
+    });
+    throw noRowError;
   }
+
+  console.log("✅ UPDATE confirmado", {
+    id: data.id,
+    telefono: data.telefono,
+    direccion: data.direccion,
+    updated_at: data.updated_at,
+  });
+
   return data;
 };
 

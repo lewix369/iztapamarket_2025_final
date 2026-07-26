@@ -124,7 +124,15 @@ const AdminBusinessTable = ({
               : []
             ).map((business) => (
               <TableRow key={business.id} className={""}>
-                <TableCell className="font-medium">{business.nombre}</TableCell>
+                <TableCell className="font-medium">
+                  <div>{business.nombre}</div>
+                  <div className="mt-1 text-xs font-normal text-gray-500">
+                    slug: {business.slug || "—"}
+                  </div>
+                  <div className="text-[11px] font-normal text-gray-400">
+                    id: {business.id}
+                  </div>
+                </TableCell>
                 <TableCell className="hidden md:table-cell">
                   {business.categoria}
                 </TableCell>

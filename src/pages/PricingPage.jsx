@@ -12,20 +12,23 @@ const plans = [
     price: "$0",
     description: "Presencia básica en el directorio",
     features: [
-      "Nombre y teléfono visible",
+      "Nombre, descripción y teléfono",
       "Dirección del negocio",
+      "1 imagen principal",
+      "Horario cuando esté confirmado",
       "Aparece en búsquedas generales",
     ],
     highlight: false,
   },
   {
-    title: "Plan Intermedio",
+    title: "Plan Pro",
     price: "$149",
     description: "Mejor visibilidad y enlaces sociales",
     features: [
-      "Incluye redes sociales",
-      "1 imagen destacada",
-      "Prioridad media en resultados",
+      "Todo lo incluido en Free",
+      "WhatsApp, mapa y sitio web",
+      "Logo, portada y hasta 3 fotos de galería",
+      "Redes sociales, servicios y estadísticas",
     ],
     highlight: true,
   },
@@ -34,9 +37,10 @@ const plans = [
     price: "$299",
     description: "Presencia destacada y contenido optimizado",
     features: [
-      "Galería de imágenes",
-      "Botón de WhatsApp y video",
-      "Optimización SEO y posición destacada",
+      "Todo lo incluido en Pro",
+      "Hasta 6 fotos de galería y video",
+      "Menú para negocios de alimentos",
+      "Promociones, SEO y herramientas con IA",
     ],
     highlight: false,
   },
@@ -47,7 +51,10 @@ const PricingPage = () => {
 
   const handleSelectPlan = (planTitle) => {
     const normalizedTitle = planTitle.toLowerCase();
-    if (normalizedTitle.includes("intermedio")) {
+    if (
+      normalizedTitle.includes("intermedio") ||
+      normalizedTitle.includes("pro")
+    ) {
       navigate("/checkout?plan=pro");
     } else if (normalizedTitle.includes("premium")) {
       navigate("/checkout?plan=premium");

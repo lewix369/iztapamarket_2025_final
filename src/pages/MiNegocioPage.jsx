@@ -11,6 +11,10 @@ import { Label } from "@/components/ui/label";
 import { Upload } from "lucide-react";
 import { mapPromo } from "@/utils/mapPromo";
 import BusinessForm from "@/components/admin/BusinessForm";
+import {
+  getPlanCapabilities,
+  normalizePlan,
+} from "@/lib/planCapabilities";
 
 /* =========================
    Utilidad: YouTube a /embed/
@@ -193,7 +197,24 @@ const MiNegocioPage = () => {
   const [selectedImages, setSelectedImages] = useState([]);
   const handleGallerySelection = (event) => {
     const files = Array.from(event.target.files);
-    const previews = files.map((file) => ({
+    const currentCount = Array.isArray(business.gallery_images)
+      ? business.gallery_images.length
+      : 0;
+    const availableSlots = Math.max(
+      0,
+      planCapabilities.galleryLimit - currentCount - selectedImages.length
+    );
+    const acceptedFiles = files.slice(0, availableSlots);
+
+    if (acceptedFiles.length < files.length) {
+      toast({
+        title: "Límite de galería",
+        description: `Tu plan permite hasta ${planCapabilities.galleryLimit} imágenes.`,
+        variant: "destructive",
+      });
+    }
+
+    const previews = acceptedFiles.map((file) => ({
       file,
       preview: URL.createObjectURL(file),
     }));
@@ -221,6 +242,7 @@ const MiNegocioPage = () => {
     descripcion: "",
     servicios: "", // UI como string, se normaliza a array al guardar
     telefono: "",
+    hours: "",
     whatsapp: "",
     direccion: "",
     mapa_embed_url: "",
@@ -310,11 +332,10 @@ const MiNegocioPage = () => {
   ).toLowerCase();
   const profilePlanSafe = (profilePlan || "").toLowerCase();
 
-  const planName =
-    negocioPlan ||
-    profilePlanSafe ||
-    rawUrlPlan ||
-    "free";
+  const planName = normalizePlan(
+    negocioPlan || profilePlanSafe || rawUrlPlan || "free"
+  );
+  const planCapabilities = getPlanCapabilities(planName);
 
   const isPremiumPlan = planName === "premium";
 
@@ -1788,6 +1809,7 @@ const MiNegocioPage = () => {
       descripcion: business.descripcion,
       servicios: serviciosArray,
       telefono: business.telefono,
+      hours: business.hours,
       whatsapp: business.whatsapp,
       direccion: business.direccion,
       mapa_embed_url: business.mapa_embed_url,
@@ -2015,7 +2037,60 @@ const MiNegocioPage = () => {
   const loginUrl = `/login?redirect=${encodeURIComponent(
     redirectTarget
   )}&email=${encodeURIComponent(emailParam)}`;
- 
+
+  if (!authChecked) {
+    return (
+      <div className="container mx-auto max-w-3xl px-4 py-16">
+        <div className="rounded-xl border bg-white p-8 text-center shadow-sm">
+          <h1 className="text-2xl font-bold text-gray-900">
+            Cargando tu negocio...
+          </h1>
+          <p className="mt-3 text-gray-600">
+            Estamos verificando tu sesión y la información de tu cuenta.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!hasSession) {
+    return (
+      <div className="container mx-auto max-w-3xl px-4 py-16">
+        <div className="rounded-xl border bg-white p-8 text-center shadow-sm">
+          <h1 className="text-3xl font-bold text-gray-900">
+            Administra tu negocio
+          </h1>
+          <p className="mx-auto mt-4 max-w-xl text-gray-600">
+            Inicia sesión con la cuenta vinculada a tu negocio para consultar y
+            editar su información.
+          </p>
+
+          {shouldShowLoginCta && emailParam && (
+            <p className="mx-auto mt-3 max-w-xl rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              Usa la cuenta asociada a <strong>{emailParam}</strong> para
+              completar la configuración de tu negocio.
+            </p>
+          )}
+
+          <div className="mt-7 flex flex-col justify-center gap-3 sm:flex-row">
+            <a
+              href={loginUrl}
+              className="inline-flex min-h-[44px] items-center justify-center rounded-lg bg-blue-600 px-6 py-3 font-semibold text-white transition-colors hover:bg-blue-700"
+            >
+              Iniciar sesión
+            </a>
+            <a
+              href="/planes"
+              className="inline-flex min-h-[44px] items-center justify-center rounded-lg border border-gray-300 px-6 py-3 font-semibold text-gray-700 transition-colors hover:bg-gray-50"
+            >
+              Ver planes
+            </a>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="p-6 max-w-3xl mx-auto bg-white shadow-lg rounded-lg border border-gray-200">
       <h1 className="text-2xl font-bold mb-4 text-gray-800">
@@ -2184,42 +2259,56 @@ const MiNegocioPage = () => {
                   setBusiness({ ...business, telefono: e.target.value })
                 }
               />
-              {/* WhatsApp (opcional) */}
-              <label className="mt-2 block">WhatsApp (opcional)</label>
+              <label className="mt-2 block">Horario confirmado (opcional)</label>
               <Input
-                type="tel"
-                name="whatsapp"
-                placeholder="+52 55 1234 5678"
-                value={business.whatsapp || ""}
+                type="text"
+                name="hours"
+                placeholder="Ej. Lun–Vie: 09:00–18:00"
+                value={business.hours || ""}
                 onChange={(e) =>
-                  setBusiness({ ...business, whatsapp: e.target.value })
+                  setBusiness({ ...business, hours: e.target.value })
                 }
-                onBlur={(e) => {
-                  const v = normalizeWhats(e.target.value);
-                  if (v && v !== business.whatsapp)
-                    setBusiness((prev) => ({ ...prev, whatsapp: v }));
-                }}
               />
-              <div className="text-xs text-gray-500 mt-1 flex items-center gap-2">
-                <span>
-                  Ingresa tu número con lada internacional. Si dejas vacío, solo se
-                  mostrará el botón de llamada.
-                </span>
-                {isValidWhats(business.whatsapp) && (
-                  <a
-                    href={toWaLink(business.whatsapp)}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="underline text-green-700"
-                    title="Probar enlace de WhatsApp"
-                  >
-                    Probar WhatsApp
-                  </a>
-                )}
-              </div>
+              {/* WhatsApp (opcional) */}
+              {planCapabilities.whatsapp && (
+                <>
+                  <label className="mt-2 block">WhatsApp (opcional)</label>
+                  <Input
+                    type="tel"
+                    name="whatsapp"
+                    placeholder="+52 55 1234 5678"
+                    value={business.whatsapp || ""}
+                    onChange={(e) =>
+                      setBusiness({ ...business, whatsapp: e.target.value })
+                    }
+                    onBlur={(e) => {
+                      const v = normalizeWhats(e.target.value);
+                      if (v && v !== business.whatsapp)
+                        setBusiness((prev) => ({ ...prev, whatsapp: v }));
+                    }}
+                  />
+                  <div className="text-xs text-gray-500 mt-1 flex items-center gap-2">
+                    <span>
+                      Ingresa tu número con lada internacional. Si dejas vacío,
+                      solo se mostrará el botón de llamada.
+                    </span>
+                    {isValidWhats(business.whatsapp) && (
+                      <a
+                        href={toWaLink(business.whatsapp)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="underline text-green-700"
+                        title="Probar enlace de WhatsApp"
+                      >
+                        Probar WhatsApp
+                      </a>
+                    )}
+                  </div>
+                </>
+              )}
 
               {/* Mapa / Ubicación (solo Pro y Premium) */}
-              {(planName === "pro" || planName === "premium") && (
+              {planCapabilities.map && (
                 <>
                   <h2 className="text-xl font-semibold text-gray-900 mt-6">
                     Mapa y ubicación
@@ -2338,7 +2427,7 @@ const MiNegocioPage = () => {
       )}
 
       {/* Descripción */}
-      {(planName === "pro" || planName === "premium") && (
+      {planCapabilities.services && (
         <>
           <h2 className="text-xl font-semibold text-gray-900 mt-6">
             Descripción del negocio
@@ -2363,7 +2452,7 @@ const MiNegocioPage = () => {
               setBusiness((prev) => ({ ...prev, servicios: e.target.value }))
             }
           />
-          {planName === "premium" && (
+          {planCapabilities.ai && (
             <>
               <Button
                 id="ai-generate"
@@ -2386,7 +2475,7 @@ const MiNegocioPage = () => {
       )}
 
       {/* Redes + Galería */}
-      {(planName === "pro" || planName === "premium") && (
+      {planCapabilities.social && (
         <>
           <h2 className="text-xl font-semibold text-gray-900 mt-8">
             Redes sociales
@@ -2453,7 +2542,8 @@ const MiNegocioPage = () => {
             <p id="gallery-status" className="mt-2 text-xs text-gray-500">
               {selectedImages.length > 0
                 ? `${selectedImages.length} seleccionada(s)`
-                : "Sin archivos seleccionados"}
+                : "Sin archivos seleccionados"}{" "}
+              · Máximo {planCapabilities.galleryLimit} imágenes en tu plan
             </p>
             {selectedImages.length > 0 && (
               <div className="flex flex-wrap gap-4 mt-4">
