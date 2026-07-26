@@ -179,7 +179,30 @@ export const getDistinctCategories = async (supabase) => {
 
     if (error) {
       console.error("Error al obtener categorías distintas:", error);
-      return [];
+      // Compatibilidad para entornos donde la migración RPC aún no se ha
+      // aplicado: usa el catálogo pequeño de categorías, nunca la tabla
+      // completa de negocios.
+      const { data: fallback, error: fallbackError } = await supabase
+        .from("categorias")
+        .select("nombre,slug_categoria")
+        .order("nombre", { ascending: true });
+
+      if (fallbackError) {
+        console.error(
+          "Error al obtener el catálogo de categorías:",
+          fallbackError
+        );
+        return [];
+      }
+
+      distinctCategoriesCache = (fallback || [])
+        .map((row) =>
+          String(row?.nombre || row?.slug_categoria || "")
+            .toLowerCase()
+            .trim()
+        )
+        .filter(Boolean);
+      return distinctCategoriesCache;
     }
 
     distinctCategoriesCache = (data || [])

@@ -15,6 +15,7 @@ const RAW_SITE_URL =
   "http://localhost:5173";
 const SITE_URL = RAW_SITE_URL.replace(/\/+$/, ""); // sin slash al final
 const PAGE_SIZE = 1000;
+const URLS_PER_SITEMAP = 45000;
 
 if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
   console.error(
@@ -92,7 +93,7 @@ async function fetchData() {
 }
 
 // --- Build sitemap XML ---
-function buildSitemap({ categories, businesses }) {
+function buildEntries({ categories, businesses }) {
   const entries = [];
 
   // Home
@@ -130,6 +131,10 @@ function buildSitemap({ categories, businesses }) {
   // Orden estable por URL
   entries.sort((a, b) => a.loc.localeCompare(b.loc));
 
+  return entries;
+}
+
+function buildUrlset(entries) {
   const urlset = entries
     .map(
       ({ loc, lastmod, priority }) => `
@@ -148,20 +153,59 @@ ${urlset}
 </urlset>`;
 }
 
+function buildSitemapIndex(files) {
+  const generatedAt = new Date().toISOString();
+  const entries = files
+    .map(
+      (file) => `
+  <sitemap>
+    <loc>${xmlEscape(normalizeUrl(SITE_URL, "sitemaps", file))}</loc>
+    <lastmod>${generatedAt}</lastmod>
+  </sitemap>`
+    )
+    .join("");
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+${entries}
+</sitemapindex>`;
+}
+
 // --- Main ---
 async function main() {
   try {
     const { categories, businesses } = await fetchData();
-    const xml = buildSitemap({ categories, businesses });
-
     const outDir = path.resolve("public");
     if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
+    const sitemapDir = path.join(outDir, "sitemaps");
+    if (!fs.existsSync(sitemapDir)) {
+      fs.mkdirSync(sitemapDir, { recursive: true });
+    }
 
+    for (const file of fs.readdirSync(sitemapDir)) {
+      if (/^sitemap-\d+\.xml$/.test(file)) {
+        fs.unlinkSync(path.join(sitemapDir, file));
+      }
+    }
+
+    const entries = buildEntries({ categories, businesses });
+    const files = [];
+    for (let index = 0; index < entries.length; index += URLS_PER_SITEMAP) {
+      const file = `sitemap-${files.length + 1}.xml`;
+      fs.writeFileSync(
+        path.join(sitemapDir, file),
+        buildUrlset(entries.slice(index, index + URLS_PER_SITEMAP)),
+        "utf8"
+      );
+      files.push(file);
+    }
+
+    const xml = buildSitemapIndex(files);
     const outPath = path.join(outDir, "sitemap.xml");
     fs.writeFileSync(outPath, xml, "utf8");
 
     console.log(
-      `✅ sitemap.xml generado en ${outPath} (${categories.length} categorías, ${businesses.length} negocios) [SITE_URL=${SITE_URL}]`
+      `✅ Índice sitemap generado en ${outPath}: ${files.length} archivos, ${entries.length} URLs (${categories.length} categorías, ${businesses.length} negocios) [SITE_URL=${SITE_URL}]`
     );
   } catch (e) {
     console.error("❌ Error generando sitemap:", e);
