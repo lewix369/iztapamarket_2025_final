@@ -14,6 +14,7 @@ const RAW_SITE_URL =
   process.env.PUBLIC_BASE_URL ||
   "http://localhost:5173";
 const SITE_URL = RAW_SITE_URL.replace(/\/+$/, ""); // sin slash al final
+const PAGE_SIZE = 1000;
 
 if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
   console.error(
@@ -44,32 +45,43 @@ function isoOrNow(value) {
 }
 
 // --- Data fetch ---
-async function fetchData() {
-  // Categorías (slugs únicos, válidos)
-  const { data: catRows, error: catErr } = await supabase
-    .from("negocios")
-    .select("slug_categoria")
-    .eq("is_deleted", false)
-    .eq("is_approved", true);
+async function fetchApprovedBusinesses() {
+  const rows = [];
 
-  if (catErr) throw catErr;
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await supabase
+      .from("negocios")
+      .select("id,slug,slug_categoria,updated_at")
+      .eq("is_deleted", false)
+      .eq("is_approved", true)
+      .order("id", { ascending: true })
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (error) throw error;
+
+    const page = data || [];
+    rows.push(...page);
+    console.log(`Sitemap: ${rows.length} negocios aprobados leídos`);
+
+    if (page.length < PAGE_SIZE) break;
+  }
+
+  return rows;
+}
+
+async function fetchData() {
+  const rows = await fetchApprovedBusinesses();
+
+  // Categorías (slugs únicos, válidos)
   const categories = [
-    ...new Set((catRows || []).map((r) => r?.slug_categoria).filter(Boolean)),
+    ...new Set(rows.map((row) => row?.slug_categoria).filter(Boolean)),
   ];
 
   // Negocios con slug y updated_at
-  const { data: bizRows, error: bizErr } = await supabase
-    .from("negocios")
-    .select("slug, updated_at")
-    .eq("is_deleted", false)
-    .eq("is_approved", true);
-
-  if (bizErr) throw bizErr;
-
   // Dedup por slug y filtra vacíos
   const seen = new Set();
   const businesses = [];
-  for (const row of bizRows || []) {
+  for (const row of rows) {
     if (!row?.slug) continue;
     if (seen.has(row.slug)) continue;
     seen.add(row.slug);
