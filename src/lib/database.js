@@ -89,27 +89,51 @@ export const searchBusinesses = async (
   const from = page * pageSize;
   const to = from + pageSize - 1;
 
-  let q = supabase
+  let dataQuery = supabase
     .from("negocios")
-    .select(PUBLIC_BUSINESS_LIST_FIELDS, { count: "exact" })
+    .select(PUBLIC_BUSINESS_LIST_FIELDS)
     .eq("is_deleted", false)
     .eq("is_approved", true);
 
-  q = applyPublicBusinessFilters(q, query, planType, category);
+  let countQuery = supabase
+    .from("negocios")
+    .select("id", { count: "exact", head: true })
+    .eq("is_deleted", false)
+    .eq("is_approved", true);
 
-  const { data, error, count } = await q
-    .order("plan_rank", { ascending: true })
-    .order("sort_name", { ascending: true })
-    .order("id", { ascending: true })
-    .range(from, to);
+  dataQuery = applyPublicBusinessFilters(
+    dataQuery,
+    query,
+    planType,
+    category
+  );
+  countQuery = applyPublicBusinessFilters(
+    countQuery,
+    query,
+    planType,
+    category
+  );
 
+  // El conteo exacto y la lectura ordenada usan planes distintos en Postgres.
+  // Al separarlos evitamos que una categoría grande exceda el límite de tiempo
+  // sin sacrificar el total exacto que se muestra en la interfaz.
+  const [dataResult, countResult] = await Promise.all([
+    dataQuery
+      .order("plan_rank", { ascending: true })
+      .order("sort_name", { ascending: true })
+      .order("id", { ascending: true })
+      .range(from, to),
+    countQuery,
+  ]);
+
+  const error = dataResult.error || countResult.error;
   if (error) {
-    console.error("Error al buscar negocios:", error);
+    console.error("Error al buscar negocios:", JSON.stringify(error));
     return { data: [], count: 0, hasMore: false, error };
   }
 
-  const rows = data || [];
-  const total = count || 0;
+  const rows = dataResult.data || [];
+  const total = countResult.count || 0;
 
   return {
     data: rows,

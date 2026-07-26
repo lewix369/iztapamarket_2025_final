@@ -322,6 +322,9 @@ for (const candidate of missingCandidates) {
     telefono: String(candidate.Telefono || "").trim() || null,
     direccion: address,
     imagen_url: await imageFor(candidate, categorySlug, sourceId),
+    // DENUE no entrega horarios. Se fuerza null para impedir que el valor
+    // predeterminado de la tabla publique un horario no verificado.
+    hours: null,
     plan_type: "free",
     is_featured: false,
     whatsapp: null,
