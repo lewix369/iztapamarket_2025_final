@@ -115,16 +115,28 @@ export const searchBusinesses = async (
   );
 
   // El conteo exacto y la lectura ordenada usan planes distintos en Postgres.
-  // Al separarlos evitamos que una categoría grande exceda el límite de tiempo
-  // sin sacrificar el total exacto que se muestra en la interfaz.
-  const [dataResult, countResult] = await Promise.all([
-    dataQuery
-      .order("plan_rank", { ascending: true })
-      .order("sort_name", { ascending: true })
-      .order("id", { ascending: true })
-      .range(from, to),
-    countQuery,
-  ]);
+  // En categorías pueden ejecutarse en paralelo gracias a sus índices. En una
+  // búsqueda de texto se ejecutan en secuencia para no competir por el límite
+  // de tiempo del servicio cuando el directorio tiene decenas de miles de filas.
+  const orderedDataQuery = dataQuery
+    .order("plan_rank", { ascending: true })
+    .order("sort_name", { ascending: true })
+    .order("id", { ascending: true })
+    .range(from, to);
+
+  let dataResult;
+  let countResult;
+  if (query) {
+    dataResult = await orderedDataQuery;
+    countResult = dataResult.error
+      ? { count: 0, error: null }
+      : await countQuery;
+  } else {
+    [dataResult, countResult] = await Promise.all([
+      orderedDataQuery,
+      countQuery,
+    ]);
+  }
 
   const error = dataResult.error || countResult.error;
   if (error) {
