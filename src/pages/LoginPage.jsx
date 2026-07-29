@@ -20,6 +20,7 @@ const safeDecodeURIComponent = (value) => {
 
 const LoginPage = () => {
   const [searchParams] = useSearchParams();
+  const isReviewIntent = searchParams.get("intent") === "review";
   // Normaliza el destino: si viene vacío o apunta al Home, forzamos /mi-negocio
   const rawRedirect = searchParams.get("redirect") || "";
   const requestedRedirect = safeDecodeURIComponent(rawRedirect);
@@ -38,12 +39,12 @@ const LoginPage = () => {
   const [sent, setSent] = useState(false);
   const navigate = useNavigate();
 
-  // Guarda el destino deseado para después del login si viene en la URL
+  // Guarda el destino explícito para regresar al punto donde empezó el acceso.
   useEffect(() => {
-    if (redirect && typeof window !== "undefined") {
+    if (requestedRedirect && typeof window !== "undefined") {
       localStorage.setItem("post_login_redirect", redirect);
     }
-  }, [redirect]);
+  }, [redirect, requestedRedirect]);
 
   // Si ya hay sesión activa al entrar al login, redirige de inmediato
   useEffect(() => {
@@ -236,11 +237,24 @@ const LoginPage = () => {
   return (
     <>
       <Helmet>
-        <title>Iniciar Sesión - IztapaMarket</title>
+        <title>
+          {isReviewIntent
+            ? "Iniciar sesión para reseñar - IztapaMarket"
+            : "Iniciar Sesión - IztapaMarket"}
+        </title>
       </Helmet>
 
       <div className="max-w-md mx-auto py-10">
-        <h1 className="text-2xl font-bold mb-6">Iniciar Sesión</h1>
+        <h1 className="text-2xl font-bold">
+          {isReviewIntent
+            ? "Inicia sesión para publicar tu reseña"
+            : "Iniciar sesión"}
+        </h1>
+        <p className="mb-6 mt-2 text-sm text-gray-600">
+          {isReviewIntent
+            ? "Entrarás como usuario y volverás a la ficha del negocio. Esto no te convierte en propietario."
+            : "Accede al panel de tu negocio o continúa al destino que solicitaste."}
+        </p>
 
         {/* Toggle de modo: Magic link (sin contraseña) o con contraseña */}
         <div className="flex gap-2 mb-6">
@@ -268,6 +282,12 @@ const LoginPage = () => {
                 tu correo y haz clic para entrar. Si no llega, revisa spam o
                 intenta de nuevo.
               </p>
+              {isReviewIntent && (
+                <p className="mt-2 text-sm">
+                  Después de entrar regresarás al negocio para terminar tu
+                  reseña.
+                </p>
+              )}
             </div>
           ) : (
             <form onSubmit={handleSendMagic} className="space-y-4">
@@ -283,11 +303,16 @@ const LoginPage = () => {
               </div>
               {error && <p className="text-red-500">{error}</p>}
               <Button type="submit" className="w-full" disabled={loading}>
-                {loading ? "Enviando..." : "Enviar enlace de acceso"}
+                {loading
+                  ? "Enviando..."
+                  : isReviewIntent
+                  ? "Enviar enlace para reseñar"
+                  : "Enviar enlace de acceso"}
               </Button>
               <p className="text-xs text-gray-500">
-                Recibirás un enlace de 1 uso que te llevará directamente a tu
-                panel.
+                {isReviewIntent
+                  ? "Recibirás un enlace de un solo uso que te regresará a esta ficha."
+                  : "Recibirás un enlace de un solo uso que te llevará directamente a tu panel."}
               </p>
             </form>
           )

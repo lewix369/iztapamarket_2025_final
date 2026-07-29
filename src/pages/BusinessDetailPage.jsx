@@ -641,11 +641,15 @@ const BusinessReviews = ({ business }) => {
         <div className="my-6 rounded-xl bg-blue-50 p-4 text-blue-900">
           <p className="font-medium">Inicia sesión para dejar una reseña.</p>
           <a
-            href="/login"
+            href={`/login?intent=review&redirect=${encodeURIComponent(
+              typeof window !== "undefined"
+                ? `${window.location.pathname}${window.location.search}`
+                : `/negocio/${business.slug}`
+            )}`}
             onClick={rememberReturnPath}
             className="mt-3 inline-flex rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
           >
-            Iniciar sesión
+            Iniciar sesión para reseñar
           </a>
         </div>
       ) : isBusinessOwner ? (
@@ -994,13 +998,18 @@ const BusinessDetailPage = () => {
   useEffect(() => {
     const fetchPromociones = async () => {
       if (!business?.id) return;
+      const today = new Date().toISOString().split("T")[0];
       const { data: promocionesData, error } = await supabase
         .from("promociones")
         .select("*")
-        .eq("negocio_id", business.id);
+        .eq("negocio_id", business.id)
+        .lte("fecha_inicio", today)
+        .gte("fecha_fin", today)
+        .order("fecha_fin", { ascending: true });
 
       if (error) {
         console.error("❌ Error cargando promociones:", error);
+        setPromociones([]);
         return;
       }
       setPromociones(promocionesData || []);

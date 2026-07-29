@@ -169,6 +169,7 @@ const BusinessListPage = () => {
   const [businesses, setBusinesses] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [loadError, setLoadError] = useState("");
   const [totalBusinesses, setTotalBusinesses] = useState(0);
   const [page, setPage] = useState(0);
   const [hasMore, setHasMore] = useState(false);
@@ -262,6 +263,7 @@ const BusinessListPage = () => {
         isLoadingMoreRef.current = false;
         setIsLoadingMore(false);
         setIsLoading(true);
+        setLoadError("");
         setHasMore(false);
       }
 
@@ -285,6 +287,7 @@ const BusinessListPage = () => {
           );
 
           if (requestId !== requestIdRef.current) return;
+          if (result.error) throw result.error;
 
           const sanitized = (result.data || []).filter(
             (b) => b?.is_approved === true && b?.is_deleted !== true
@@ -299,6 +302,7 @@ const BusinessListPage = () => {
           setTotalBusinesses(result.count || 0);
           setHasMore(result.hasMore === true);
           setPage(pageToLoad);
+          setLoadError("");
           return;
         }
 
@@ -311,6 +315,7 @@ const BusinessListPage = () => {
         );
 
         if (requestId !== requestIdRef.current) return;
+        if (result.error) throw result.error;
 
         const sanitized = (result.data || []).filter(
           (b) => b?.is_approved === true && b?.is_deleted !== true
@@ -325,6 +330,14 @@ const BusinessListPage = () => {
         setTotalBusinesses(result.count || 0);
         setHasMore(result.hasMore === true);
         setPage(pageToLoad);
+        setLoadError("");
+      } catch (error) {
+        if (requestId !== requestIdRef.current) return;
+
+        console.error("Error al cargar el directorio:", error);
+        setLoadError(
+          "No pudimos cargar los negocios. Revisa tu conexión e intenta nuevamente."
+        );
       } finally {
         if (requestId === requestIdRef.current) {
           setIsLoading(false);
@@ -738,6 +751,19 @@ const BusinessListPage = () => {
               <h3 className="text-2xl font-bold text-gray-900 mb-2">
                 Cargando negocios...
               </h3>
+            </motion.div>
+          ) : loadError && businessesForView.length === 0 ? (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="text-center py-20"
+            >
+              <div className="text-6xl mb-4">📡</div>
+              <h3 className="text-2xl font-bold text-gray-900 mb-2">
+                No pudimos cargar los negocios
+              </h3>
+              <p className="text-gray-600 mb-6">{loadError}</p>
+              <Button onClick={loadInitialData}>Reintentar</Button>
             </motion.div>
           ) : businessesForView.length === 0 ? (
             <motion.div

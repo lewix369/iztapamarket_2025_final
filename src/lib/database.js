@@ -651,42 +651,6 @@ export const searchBusinesses = async (
     ]);
   }
 
-  // El listado puede responder aunque el conteo general exceda el tiempo
-  // permitido. Para las vistas sin categoría/estado especiales recuperamos el
-  // total mediante los conteos indexados por plan y conservamos las filas.
-  if (
-    !dataResult.error &&
-    countResult.error &&
-    !search?.trim() &&
-    category === "all" &&
-    status === "all"
-  ) {
-    try {
-      const stats = await getAdminBusinessStats(supabase);
-      const count =
-        plan === "premium"
-          ? stats.premium
-          : plan === "pro"
-          ? stats.pro
-          : plan === "free"
-          ? stats.free
-          : stats.total;
-
-      return {
-        data: dataResult.data || [],
-        count,
-        page: safePage,
-        pageSize: safePageSize,
-        error: null,
-      };
-    } catch (statsError) {
-      console.error(
-        "Error al recuperar el conteo alternativo admin:",
-        statsError
-      );
-    }
-  }
-
   const error = dataResult.error || countResult.error;
   if (error) {
     // En la ruta de compatibilidad, el conteo exacto puede agotar el tiempo
