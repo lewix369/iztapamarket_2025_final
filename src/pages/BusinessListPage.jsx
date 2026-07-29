@@ -41,6 +41,9 @@ import {
   searchBusinesses as fetchBusinessesFromDb,
   getBusinessesForNearby,
   getDistinctCategories,
+  getPublicBusinessImage,
+  getPublicBusinessName,
+  getBusinessReviewSummaries,
 } from "@/lib/database";
 import { supabase } from "@/lib/supabaseClient";
 
@@ -62,17 +65,24 @@ const isPlaceholderUrl = (url) =>
   /via\.placeholder\.com|placeholder\.com|300x200|text=Ejemplo/i.test(url);
 
 const pickImage = (b) => {
-  const url =
-    b?.portada_url ||
-    b?.imagen_url ||
-    b?.cover_image_url ||
-    b?.business_cover_url ||
-    b?.logo_url ||
-    b?.image_url;
+  const url = getPublicBusinessImage(b);
 
   if (!url) return FALLBACK_IMG;
   if (isPlaceholderUrl(url)) return FALLBACK_IMG;
   return url;
+};
+
+const addReviewSummaries = async (businesses) => {
+  const rows = businesses || [];
+  const summaries = await getBusinessReviewSummaries(
+    supabase,
+    rows.map((business) => business.id)
+  );
+  return rows.map((business) => ({
+    ...business,
+    rating: summaries[business.id]?.rating || 0,
+    reviews_count: summaries[business.id]?.reviews_count || 0,
+  }));
 };
 
 // Convierte URL pública de Supabase Storage a thumbnail usando Image Transform
@@ -178,7 +188,9 @@ const BusinessListPage = () => {
     locationQuery.get("sort") || "default"
   ); // "default" | "nearby"
   const [isLocating, setIsLocating] = useState(false); // NUEVO
-  const [nearbyVisibleCount, setNearbyVisibleCount] = useState(PAGE_SIZE);
+  const [nearbyRadiusKm, setNearbyRadiusKm] = useState(
+    Number(locationQuery.get("radius")) || 1
+  );
   const requestIdRef = useRef(0);
   const isLoadingMoreRef = useRef(false);
   const loadMoreActionRef = useRef(null);
@@ -262,7 +274,14 @@ const BusinessListPage = () => {
             supabase,
             termToFetch,
             planValueToFetch,
-            categoryValueToFetch
+            categoryValueToFetch,
+            {
+              lat: userLoc.lat,
+              lng: userLoc.lng,
+              radiusKm: nearbyRadiusKm,
+              page: pageToLoad,
+              pageSize: PAGE_SIZE,
+            }
           );
 
           if (requestId !== requestIdRef.current) return;
@@ -270,12 +289,16 @@ const BusinessListPage = () => {
           const sanitized = (result.data || []).filter(
             (b) => b?.is_approved === true && b?.is_deleted !== true
           );
+          const enriched = await addReviewSummaries(sanitized);
 
-          setBusinesses(sanitized);
-          setTotalBusinesses(sanitized.length);
-          setNearbyVisibleCount(PAGE_SIZE);
-          setHasMore(sanitized.length > PAGE_SIZE);
-          setPage(0);
+          if (requestId !== requestIdRef.current) return;
+
+          setBusinesses((current) =>
+            append ? [...current, ...enriched] : enriched
+          );
+          setTotalBusinesses(result.count || 0);
+          setHasMore(result.hasMore === true);
+          setPage(pageToLoad);
           return;
         }
 
@@ -292,9 +315,12 @@ const BusinessListPage = () => {
         const sanitized = (result.data || []).filter(
           (b) => b?.is_approved === true && b?.is_deleted !== true
         );
+        const enriched = await addReviewSummaries(sanitized);
+
+        if (requestId !== requestIdRef.current) return;
 
         setBusinesses((current) =>
-          append ? [...current, ...sanitized] : sanitized
+          append ? [...current, ...enriched] : enriched
         );
         setTotalBusinesses(result.count || 0);
         setHasMore(result.hasMore === true);
@@ -307,7 +333,7 @@ const BusinessListPage = () => {
         }
       }
     },
-    [getCurrentFilters, sortMode, userLoc]
+    [getCurrentFilters, sortMode, userLoc, nearbyRadiusKm]
   );
 
   const loadInitialData = useCallback(() => {
@@ -331,7 +357,10 @@ const BusinessListPage = () => {
       params.set("plan", selectedPlan);
     if (selectedCategory && selectedCategory !== "all")
       params.set("category", selectedCategory);
-    if (sortMode === "nearby") params.set("sort", "nearby");
+    if (sortMode === "nearby") {
+      params.set("sort", "nearby");
+      params.set("radius", String(nearbyRadiusKm));
+    }
 
     const queryString = params.toString();
     const current = `${reactRouterLocation.pathname}${reactRouterLocation.search}`;
@@ -343,6 +372,7 @@ const BusinessListPage = () => {
     selectedPlan,
     selectedCategory,
     sortMode,
+    nearbyRadiusKm,
     navigate,
     reactRouterLocation,
   ]);
@@ -385,6 +415,7 @@ const BusinessListPage = () => {
     setSelectedCategory("all");
     setSortMode("default");
     setUserLoc(null);
+    setNearbyRadiusKm(1);
   };
 
   // Toggle cercanía con estado de “Ubicando…”
@@ -410,7 +441,11 @@ const BusinessListPage = () => {
         alert("No se pudo obtener tu ubicación.");
         setIsLocating(false);
       },
-      { enableHighAccuracy: true, timeout: 10000 }
+      {
+        enableHighAccuracy: false,
+        timeout: 5000,
+        maximumAge: 300000,
+      }
     );
   };
 
@@ -427,10 +462,14 @@ const BusinessListPage = () => {
       return 3;
     };
 
-    const nameKey = (b) => String(b?.nombre ?? "").trim().toLowerCase();
+    const nameKey = (b) => getPublicBusinessName(b).toLowerCase();
 
     const withDistance = businesses.map((b) => {
       if (userLoc) {
+        const serverDistance = Number(b?.__distance_km ?? b?.distance_km);
+        if (Number.isFinite(serverDistance)) {
+          return { ...b, __distance_km: serverDistance };
+        }
         const ll = getLatLng(b);
         const d = ll
           ? haversineKm(userLoc.lat, userLoc.lng, ll.lat, ll.lng)
@@ -460,28 +499,13 @@ const BusinessListPage = () => {
     return withDistance;
   }, [businesses, userLoc, sortMode]);
 
-  const visibleBusinesses = useMemo(
-    () =>
-      sortMode === "nearby"
-        ? businessesForView.slice(0, nearbyVisibleCount)
-        : businessesForView,
-    [businessesForView, nearbyVisibleCount, sortMode]
-  );
+  const visibleBusinesses = businessesForView;
 
   const loadMoreBusinesses = useCallback(() => {
     if (!hasMore || isLoadingMoreRef.current) return;
 
-    if (sortMode === "nearby") {
-      setNearbyVisibleCount((current) => {
-        const next = Math.min(current + PAGE_SIZE, totalBusinesses);
-        setHasMore(next < totalBusinesses);
-        return next;
-      });
-      return;
-    }
-
     loadBusinesses({ pageToLoad: page + 1, append: true });
-  }, [hasMore, loadBusinesses, page, sortMode, totalBusinesses]);
+  }, [hasMore, loadBusinesses, page]);
 
   loadMoreActionRef.current = loadMoreBusinesses;
 
@@ -548,7 +572,7 @@ const BusinessListPage = () => {
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
                 <Input
                   type="text"
-                  placeholder="Buscar por nombre, descripción o categoría..."
+                  placeholder="Busca tacos, dentista, mecánico o cualquier servicio..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="pl-10 h-12 text-black"
@@ -652,11 +676,29 @@ const BusinessListPage = () => {
                     )}
                   </span>
                 </Button>
+                {sortMode === "nearby" && userLoc && (
+                  <Select
+                    value={String(nearbyRadiusKm)}
+                    onValueChange={(value) => setNearbyRadiusKm(Number(value))}
+                  >
+                    <SelectTrigger
+                      className="h-10 w-[104px]"
+                      aria-label="Radio de búsqueda"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="1">1 km</SelectItem>
+                      <SelectItem value="3">3 km</SelectItem>
+                      <SelectItem value="5">5 km</SelectItem>
+                    </SelectContent>
+                  </Select>
+                )}
                 <div className="flex items-center gap-2 text-sm text-gray-600 whitespace-nowrap min-w-[140px]">
                   <span>{totalBusinesses} resultados</span>
                   {sortMode === "nearby" && userLoc && !isLocating && (
                     <span className="inline-flex items-center gap-1 text-green-700">
-                      • <span>Ordenado por cercanía</span>
+                      • <span>a {nearbyRadiusKm} km</span>
                     </span>
                   )}
                 </div>
@@ -708,11 +750,28 @@ const BusinessListPage = () => {
                 No se encontraron resultados
               </h3>
               <p className="text-gray-600 mb-6">
-                Intenta ajustar tus filtros o términos de búsqueda
+                {sortMode === "nearby" && nearbyRadiusKm < 5
+                  ? `No encontramos negocios a ${nearbyRadiusKm} km. Puedes ampliar el radio sin perder tus filtros.`
+                  : "Intenta ajustar tus filtros o términos de búsqueda"}
               </p>
-              <Button onClick={handleClearFilters} variant="outline">
-                Limpiar filtros
-              </Button>
+              {sortMode === "nearby" && nearbyRadiusKm < 5 ? (
+                <div className="flex flex-wrap justify-center gap-3">
+                  <Button
+                    onClick={() =>
+                      setNearbyRadiusKm(nearbyRadiusKm === 1 ? 3 : 5)
+                    }
+                  >
+                    Ampliar a {nearbyRadiusKm === 1 ? 3 : 5} km
+                  </Button>
+                  <Button onClick={handleClearFilters} variant="outline">
+                    Limpiar filtros
+                  </Button>
+                </div>
+              ) : (
+                <Button onClick={handleClearFilters} variant="outline">
+                  Limpiar filtros
+                </Button>
+              )}
             </motion.div>
           ) : (
             <div
@@ -722,13 +781,15 @@ const BusinessListPage = () => {
                   : "space-y-6"
               }
             >
-              {visibleBusinesses.map((business) => (
+              {visibleBusinesses.map((business) => {
+                const publicName = getPublicBusinessName(business);
+                return (
                 <div key={business.id}>
                   {viewMode === "grid" ? (
                     <Card className="group hover:shadow-2xl transition-all duration-300 border-0 shadow-lg overflow-hidden">
                       <div className="relative">
                         <img
-                          alt={`${business.nombre} - ${business.descripcion}`}
+                          alt={`${publicName} - ${business.descripcion}`}
                           className="w-full h-48 object-cover group-hover:scale-105 transition-transform duration-300"
                           src={
                             toSupabaseThumb(pickImage(business), {
@@ -767,13 +828,13 @@ const BusinessListPage = () => {
                         <div className="absolute top-4 right-4 bg-white/90 backdrop-blur-sm rounded-full px-3 py-1 flex items-center space-x-1">
                           <Star className="h-4 w-4 text-yellow-500 fill-current" />
                           <span className="text-sm font-semibold">
-                            {business.rating || 0}
+                            {Number(business.rating || 0).toFixed(1)}
                           </span>
                         </div>
                       </div>
                       <CardHeader>
                         <CardTitle className="text-xl group-hover:text-blue-600 transition-colors">
-                          {business.nombre}
+                          {publicName}
                         </CardTitle>
                         <CardDescription className="text-orange-600 font-medium">
                           {labelize(business.categoria)}
@@ -808,7 +869,10 @@ const BusinessListPage = () => {
                         </div>
                         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                           <div className="text-sm text-gray-500">
-                            {business.reviews_count || 0} reseñas
+                            {business.reviews_count || 0}{" "}
+                            {business.reviews_count === 1
+                              ? "reseña"
+                              : "reseñas"}
                           </div>
                           <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:items-center">
                             <Link
@@ -833,7 +897,7 @@ const BusinessListPage = () => {
                                   href={getDirectionsUrl(business)}
                                   target="_blank"
                                   rel="noopener noreferrer"
-                                  aria-label={`Cómo llegar a ${business.nombre}`}
+                                  aria-label={`Cómo llegar a ${publicName}`}
                                 >
                                   <Navigation className="h-4 w-4 mr-1.5" />
                                   Cómo llegar
@@ -849,7 +913,7 @@ const BusinessListPage = () => {
                       <div className="flex flex-col md:flex-row">
                         <div className="relative md:w-64 h-48 md:h-auto">
                           <img
-                            alt={`${business.nombre} - ${business.descripcion}`}
+                            alt={`${publicName} - ${business.descripcion}`}
                             className="w-full h-full object-cover"
                             src={
                               toSupabaseThumb(pickImage(business), {
@@ -889,7 +953,7 @@ const BusinessListPage = () => {
                           <div className="flex justify-between items-start mb-4">
                             <div>
                               <h3 className="text-2xl font-bold group-hover:text-blue-600 transition-colors">
-                                {business.nombre}
+                                {publicName}
                               </h3>
                               <p className="text-orange-600 font-medium">
                                 {labelize(business.categoria)}
@@ -898,7 +962,7 @@ const BusinessListPage = () => {
                             <div className="flex items-center space-x-1 bg-yellow-50 px-3 py-1 rounded-full">
                               <Star className="h-4 w-4 text-yellow-500 fill-current" />
                               <span className="font-semibold">
-                                {business.rating || 0}
+                                {Number(business.rating || 0).toFixed(1)}
                               </span>
                               <span className="text-sm text-gray-500">
                                 ({business.reviews_count || 0})
@@ -950,7 +1014,7 @@ const BusinessListPage = () => {
                                   href={getDirectionsUrl(business)}
                                   target="_blank"
                                   rel="noopener noreferrer"
-                                  aria-label={`Cómo llegar a ${business.nombre}`}
+                                  aria-label={`Cómo llegar a ${publicName}`}
                                 >
                                   <Navigation className="h-4 w-4 mr-2" />
                                   Cómo llegar
@@ -963,7 +1027,8 @@ const BusinessListPage = () => {
                     </Card>
                   )}
                 </div>
-              ))}
+                );
+              })}
               {hasMore && (
                 <div
                   ref={setLoadMoreNode}

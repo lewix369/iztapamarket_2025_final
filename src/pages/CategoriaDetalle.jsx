@@ -13,6 +13,11 @@ import {
 import { Button } from "@/components/ui/button";
 import { categorias } from "@/data/negocios";
 import { supabase } from "@/lib/supabaseClient";
+import {
+  getPublicBusinessImage,
+  getPublicBusinessName,
+  PUBLIC_EXCLUDED_CATEGORY,
+} from "@/lib/database";
 
 const CategoriaDetalle = () => {
   const { slug } = useParams();
@@ -26,7 +31,9 @@ const CategoriaDetalle = () => {
         .from("negocios")
         .select("*")
         .eq("slug_categoria", slug)
-        .eq("is_deleted", false);
+        .eq("is_deleted", false)
+        .eq("is_approved", true)
+        .neq("categoria", PUBLIC_EXCLUDED_CATEGORY);
 
       if (error) {
         console.error("Error al cargar negocios:", error);
@@ -173,8 +180,8 @@ const CategoriaDetalle = () => {
                       <div className="bg-white rounded-2xl shadow-lg hover:shadow-xl transition-all duration-300 overflow-hidden group-hover:scale-105">
                         <div className="relative">
                           <img
-                            src={negocio.imagen_url}
-                            alt={negocio.nombre}
+                            src={getPublicBusinessImage(negocio)}
+                            alt={getPublicBusinessName(negocio)}
                             className="w-full h-48 object-cover"
                           />
                           <div
@@ -200,7 +207,7 @@ const CategoriaDetalle = () => {
 
                         <div className="p-6">
                           <h3 className="text-xl font-bold text-[#003366] mb-2">
-                            {negocio.nombre}
+                            {getPublicBusinessName(negocio)}
                           </h3>
                           <p className="text-gray-600 mb-3 line-clamp-2">
                             {negocio.descripcion}

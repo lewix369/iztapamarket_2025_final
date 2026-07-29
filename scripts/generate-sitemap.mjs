@@ -16,6 +16,7 @@ const RAW_SITE_URL =
 const SITE_URL = RAW_SITE_URL.replace(/\/+$/, ""); // sin slash al final
 const PAGE_SIZE = 1000;
 const URLS_PER_SITEMAP = 45000;
+const EXCLUDED_PUBLIC_CATEGORY = "gobierno y comunidad";
 
 if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
   console.error(
@@ -55,6 +56,7 @@ async function fetchApprovedBusinesses() {
       .select("id,slug,slug_categoria,updated_at")
       .eq("is_deleted", false)
       .eq("is_approved", true)
+      .neq("categoria", EXCLUDED_PUBLIC_CATEGORY)
       .order("id", { ascending: true })
       .range(from, from + PAGE_SIZE - 1);
 

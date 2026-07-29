@@ -13,6 +13,11 @@ import {
 import { Button } from "@/components/ui/button";
 import { categorias } from "@/data/negocios";
 import { supabase } from "@/lib/supabaseClient";
+import {
+  getPublicBusinessImage,
+  getPublicBusinessName,
+  PUBLIC_EXCLUDED_CATEGORY,
+} from "@/lib/database";
 
 const Categorias = () => {
   const [searchTerm, setSearchTerm] = useState("");
@@ -27,7 +32,8 @@ const Categorias = () => {
         .from("negocios")
         .select("*")
         .eq("is_deleted", false)
-        .eq("is_approved", true);
+        .eq("is_approved", true)
+        .neq("categoria", PUBLIC_EXCLUDED_CATEGORY);
 
       if (error) {
         console.error("Error al cargar negocios:", error);
@@ -53,7 +59,9 @@ const Categorias = () => {
 
   const filteredNegocios = negocios.filter((negocio) => {
     const matchesSearch =
-      negocio.nombre.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      getPublicBusinessName(negocio)
+        .toLowerCase()
+        .includes(searchTerm.toLowerCase()) ||
       (negocio.descripcion || "")
         .toLowerCase()
         .includes(searchTerm.toLowerCase());
@@ -249,8 +257,8 @@ const Categorias = () => {
                       <div className="bg-white rounded-2xl shadow-lg hover:shadow-xl transition-all duration-300 overflow-hidden group-hover:scale-105">
                         <div className="relative">
                           <img
-                            src={negocio.imagen_url}
-                            alt={negocio.nombre}
+                            src={getPublicBusinessImage(negocio)}
+                            alt={getPublicBusinessName(negocio)}
                             className="w-full h-48 object-cover"
                           />
                           <div
@@ -270,7 +278,7 @@ const Categorias = () => {
                         </div>
                         <div className="p-6">
                           <h3 className="text-xl font-bold text-[#003366] mb-2">
-                            {negocio.nombre}
+                            {getPublicBusinessName(negocio)}
                           </h3>
                           <p className="text-gray-600 mb-3 line-clamp-2">
                             {negocio.descripcion}
@@ -292,8 +300,8 @@ const Categorias = () => {
                         <div className="flex">
                           <div className="relative w-48 h-32 flex-shrink-0">
                             <img
-                              src={negocio.imagen_url}
-                              alt={negocio.nombre}
+                              src={getPublicBusinessImage(negocio)}
+                              alt={getPublicBusinessName(negocio)}
                               className="w-full h-full object-cover"
                             />
                             <div
@@ -314,7 +322,7 @@ const Categorias = () => {
                           <div className="flex-1 p-6">
                             <div className="flex justify-between items-start mb-2">
                               <h3 className="text-xl font-bold text-[#003366]">
-                                {negocio.nombre}
+                                {getPublicBusinessName(negocio)}
                               </h3>
                               <span className="text-[#f97316] font-semibold text-sm">
                                 {negocio.categoria}

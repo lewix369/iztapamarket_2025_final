@@ -10,10 +10,22 @@ import { Toaster } from "@/components/ui/toaster";
 import { FaInstagram, FaFacebook, FaGlobe } from "react-icons/fa";
 import { FaTiktok } from "react-icons/fa6";
 import TransportButtons from "@/components/TransportButtons";
+import { useSession } from "@/contexts/SessionContext";
 import {
   getPlanCapabilities,
   normalizePlan,
 } from "@/lib/planCapabilities";
+import {
+  deleteBusinessReview,
+  getBusinessReviews,
+  getBusinessReviewSummaries,
+  getReviewHelpfulSummaries,
+  getPublicBusinessImage,
+  getPublicBusinessName,
+  PUBLIC_EXCLUDED_CATEGORY,
+  saveBusinessReview,
+  setReviewHelpful,
+} from "@/lib/database";
 
 /* ---------------------- Optimización de imágenes ---------------------- */
 /** Devuelve la URL tal cual, sin transformaciones que rompan en local o en Supabase */
@@ -317,6 +329,515 @@ const PromoCarousel = ({ promos = [] }) => {
   );
 };
 
+const REVIEW_TAG_OPTIONS = [
+  { value: "buen_servicio", label: "Buen servicio" },
+  { value: "precio_justo", label: "Precio justo" },
+  { value: "rapido", label: "Rápido" },
+  { value: "limpio", label: "Limpio" },
+  { value: "recomendado", label: "Recomendado" },
+];
+
+const getReviewTagLabel = (value) =>
+  REVIEW_TAG_OPTIONS.find((option) => option.value === value)?.label || value;
+
+const ReviewStars = ({
+  value,
+  onChange,
+  readOnly = false,
+  size = "text-2xl",
+}) => (
+  <div className="flex items-center gap-1" aria-label={`${value} de 5 estrellas`}>
+    {[1, 2, 3, 4, 5].map((star) =>
+      readOnly ? (
+        <span
+          key={star}
+          className={`${size} ${
+            star <= Math.round(Number(value) || 0)
+              ? "text-yellow-500"
+              : "text-gray-300"
+          }`}
+          aria-hidden="true"
+        >
+          ★
+        </span>
+      ) : (
+        <button
+          key={star}
+          type="button"
+          onClick={() => onChange(star)}
+          className={`${size} leading-none transition ${
+            star <= value ? "text-yellow-500" : "text-gray-300"
+          } hover:text-yellow-400`}
+          aria-label={`${star} estrella${star === 1 ? "" : "s"}`}
+        >
+          ★
+        </button>
+      )
+    )}
+  </div>
+);
+
+const BusinessReviews = ({ business }) => {
+  const { user } = useSession();
+  const { toast } = useToast();
+  const [reviews, setReviews] = useState([]);
+  const [summary, setSummary] = useState({ rating: 0, reviews_count: 0 });
+  const [rating, setRating] = useState(0);
+  const [comment, setComment] = useState("");
+  const [wouldReturn, setWouldReturn] = useState(null);
+  const [selectedTags, setSelectedTags] = useState([]);
+  const [loadingReviews, setLoadingReviews] = useState(true);
+  const [savingReview, setSavingReview] = useState(false);
+
+  const ownReview = reviews.find((review) => review.user_id === user?.id);
+  const userEmail = String(user?.email || "").toLowerCase();
+  const isBusinessOwner =
+    Boolean(user?.id) &&
+    (String(business?.user_id || "") === String(user.id) ||
+      String(business?.owner_user_id || "") === String(user.id) ||
+      (userEmail &&
+        String(business?.owner_email || "").toLowerCase() === userEmail));
+
+  const loadReviews = React.useCallback(async () => {
+    if (!business?.id) return;
+    setLoadingReviews(true);
+    try {
+      const [reviewRows, summaries] = await Promise.all([
+        getBusinessReviews(supabase, business.id),
+        getBusinessReviewSummaries(supabase, [business.id]),
+      ]);
+      const helpfulSummaries = await getReviewHelpfulSummaries(
+        supabase,
+        reviewRows.map((review) => review.id)
+      );
+      setReviews(
+        reviewRows.map((review) => ({
+          ...review,
+          helpful_count:
+            helpfulSummaries[review.id]?.helpful_count || 0,
+          viewer_has_voted:
+            helpfulSummaries[review.id]?.viewer_has_voted || false,
+        }))
+      );
+      setSummary(
+        summaries[business.id] || { rating: 0, reviews_count: 0 }
+      );
+    } catch (error) {
+      console.error("Error cargando reseñas:", error);
+    } finally {
+      setLoadingReviews(false);
+    }
+  }, [business?.id]);
+
+  useEffect(() => {
+    loadReviews();
+  }, [loadReviews]);
+
+  useEffect(() => {
+    if (ownReview) {
+      setRating(ownReview.rating);
+      setComment(ownReview.comment || "");
+      setWouldReturn(
+        typeof ownReview.would_return === "boolean"
+          ? ownReview.would_return
+          : null
+      );
+      setSelectedTags(ownReview.tags || []);
+    } else {
+      setRating(0);
+      setComment("");
+      setWouldReturn(null);
+      setSelectedTags([]);
+    }
+  }, [
+    ownReview?.id,
+    ownReview?.rating,
+    ownReview?.comment,
+    ownReview?.would_return,
+    ownReview?.tags,
+  ]);
+
+  const handleSaveReview = async (event) => {
+    event.preventDefault();
+    if (!user) return;
+    if (rating < 1 || rating > 5) {
+      toast({
+        title: "Selecciona una calificación",
+        description: "Elige entre 1 y 5 estrellas.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (typeof wouldReturn !== "boolean") {
+      toast({
+        title: "Cuéntanos si volverías",
+        description: "Selecciona Sí o No antes de publicar.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setSavingReview(true);
+    try {
+      const metadataName =
+        user.user_metadata?.full_name ||
+        user.user_metadata?.name ||
+        String(user.email || "").split("@")[0];
+      await saveBusinessReview(supabase, {
+        id: ownReview?.id,
+        businessId: business.id,
+        rating,
+        comment,
+        authorName: metadataName,
+        wouldReturn,
+        tags: selectedTags,
+      });
+      await loadReviews();
+      toast({
+        title: ownReview ? "Reseña actualizada" : "Reseña publicada",
+        description: "Gracias por compartir tu experiencia.",
+      });
+    } catch (error) {
+      console.error("Error guardando reseña:", error);
+      const duplicate = error?.code === "23505";
+      const blocked = error?.code === "42501";
+      toast({
+        title: "No se pudo guardar la reseña",
+        description: duplicate
+          ? "Ya existe una reseña tuya para este negocio."
+          : blocked
+          ? "No tienes permiso para reseñar este negocio."
+          : error?.message || "Inténtalo nuevamente.",
+        variant: "destructive",
+      });
+    } finally {
+      setSavingReview(false);
+    }
+  };
+
+  const handleDeleteReview = async () => {
+    if (!ownReview || !window.confirm("¿Eliminar tu reseña?")) return;
+    setSavingReview(true);
+    try {
+      await deleteBusinessReview(supabase, ownReview.id);
+      await loadReviews();
+      toast({ title: "Reseña eliminada" });
+    } catch (error) {
+      toast({
+        title: "No se pudo eliminar",
+        description: error?.message || "Inténtalo nuevamente.",
+        variant: "destructive",
+      });
+    } finally {
+      setSavingReview(false);
+    }
+  };
+
+  const rememberReturnPath = () => {
+    try {
+      localStorage.setItem(
+        "post_login_redirect",
+        `${window.location.pathname}${window.location.search}`
+      );
+    } catch {
+      // El enlace sigue funcionando aunque el navegador bloquee storage.
+    }
+  };
+
+  const toggleReviewTag = (tag) => {
+    setSelectedTags((current) => {
+      if (current.includes(tag)) {
+        return current.filter((value) => value !== tag);
+      }
+      if (current.length >= 3) {
+        toast({
+          title: "Máximo tres etiquetas",
+          description: "Elige las tres que mejor describan tu experiencia.",
+        });
+        return current;
+      }
+      return [...current, tag];
+    });
+  };
+
+  const handleHelpfulVote = async (review) => {
+    if (!user) {
+      rememberReturnPath();
+      window.location.href = "/login";
+      return;
+    }
+    if (review.user_id === user.id) return;
+
+    try {
+      await setReviewHelpful(
+        supabase,
+        review.id,
+        !review.viewer_has_voted
+      );
+      await loadReviews();
+    } catch (error) {
+      toast({
+        title: "No se pudo registrar tu voto",
+        description: error?.message || "Inténtalo nuevamente.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const visibleReviews = reviews.filter(
+    (review) => review.status === "published"
+  );
+  const topTags = Object.entries(
+    visibleReviews.reduce((counts, review) => {
+      (review.tags || []).forEach((tag) => {
+        counts[tag] = (counts[tag] || 0) + 1;
+      });
+      return counts;
+    }, {})
+  )
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, 3);
+
+  return (
+    <section className="mt-12 rounded-2xl border bg-white p-5 shadow-sm md:p-7">
+      <div className="flex flex-col gap-3 border-b pb-5 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="text-2xl font-bold text-gray-900">Reseñas</h2>
+          <p className="text-sm text-gray-500">
+            Experiencias compartidas por usuarios de IztapaMarket.
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <ReviewStars value={summary.rating} readOnly size="text-xl" />
+          <div>
+            <strong className="text-xl">{summary.rating || "0.0"}</strong>
+            <span className="ml-2 text-sm text-gray-500">
+              ({summary.reviews_count} reseña
+              {summary.reviews_count === 1 ? "" : "s"})
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {(summary.would_return_percentage != null || topTags.length > 0) && (
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          {summary.would_return_percentage != null && (
+            <span className="rounded-full bg-green-100 px-3 py-1 text-sm font-semibold text-green-800">
+              {summary.would_return_percentage}% volvería
+            </span>
+          )}
+          {topTags.map(([tag, count]) => (
+            <span
+              key={tag}
+              className="rounded-full bg-blue-50 px-3 py-1 text-sm text-blue-800"
+            >
+              {getReviewTagLabel(tag)} · {count}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {!user ? (
+        <div className="my-6 rounded-xl bg-blue-50 p-4 text-blue-900">
+          <p className="font-medium">Inicia sesión para dejar una reseña.</p>
+          <a
+            href="/login"
+            onClick={rememberReturnPath}
+            className="mt-3 inline-flex rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
+          >
+            Iniciar sesión
+          </a>
+        </div>
+      ) : isBusinessOwner ? (
+        <div className="my-6 rounded-xl bg-gray-50 p-4 text-sm text-gray-600">
+          Los propietarios no pueden reseñar su propio negocio.
+        </div>
+      ) : (
+        <form
+          onSubmit={handleSaveReview}
+          className="my-6 rounded-xl bg-gray-50 p-4"
+        >
+          <h3 className="font-semibold">
+            {ownReview ? "Edita tu reseña" : "Comparte tu experiencia"}
+          </h3>
+          {ownReview?.status === "hidden" && (
+            <p className="mt-2 text-sm text-orange-700">
+              Esta reseña fue ocultada por moderación. Puedes editarla, pero
+              permanecerá oculta hasta una nueva revisión.
+            </p>
+          )}
+          <div className="mt-3">
+            <ReviewStars value={rating} onChange={setRating} />
+          </div>
+          <fieldset className="mt-5">
+            <legend className="font-medium text-gray-800">
+              ¿Volverías a este negocio?
+            </legend>
+            <div className="mt-2 flex gap-2">
+              <button
+                type="button"
+                onClick={() => setWouldReturn(true)}
+                className={`rounded-full border px-4 py-2 text-sm font-semibold ${
+                  wouldReturn === true
+                    ? "border-green-600 bg-green-600 text-white"
+                    : "border-gray-300 bg-white text-gray-700"
+                }`}
+              >
+                Sí, volvería
+              </button>
+              <button
+                type="button"
+                onClick={() => setWouldReturn(false)}
+                className={`rounded-full border px-4 py-2 text-sm font-semibold ${
+                  wouldReturn === false
+                    ? "border-gray-700 bg-gray-700 text-white"
+                    : "border-gray-300 bg-white text-gray-700"
+                }`}
+              >
+                No volvería
+              </button>
+            </div>
+          </fieldset>
+          <fieldset className="mt-5">
+            <legend className="font-medium text-gray-800">
+              ¿Qué destacó?{" "}
+              <span className="font-normal text-gray-500">
+                Elige hasta 3
+              </span>
+            </legend>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {REVIEW_TAG_OPTIONS.map((option) => {
+                const selected = selectedTags.includes(option.value);
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => toggleReviewTag(option.value)}
+                    className={`rounded-full border px-3 py-1.5 text-sm ${
+                      selected
+                        ? "border-blue-600 bg-blue-600 text-white"
+                        : "border-gray-300 bg-white text-gray-700 hover:border-blue-400"
+                    }`}
+                    aria-pressed={selected}
+                  >
+                    {option.label}
+                  </button>
+                );
+              })}
+            </div>
+          </fieldset>
+          <textarea
+            value={comment}
+            onChange={(event) => setComment(event.target.value.slice(0, 1000))}
+            rows={4}
+            placeholder="Cuéntanos cómo fue tu experiencia (opcional)"
+            className="mt-4 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-gray-900 focus:border-blue-500 focus:outline-none"
+          />
+          <div className="mt-2 text-right text-xs text-gray-400">
+            {comment.length}/1000
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button type="submit" disabled={savingReview}>
+              {savingReview
+                ? "Guardando..."
+                : ownReview
+                ? "Actualizar reseña"
+                : "Publicar reseña"}
+            </Button>
+            {ownReview && (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={savingReview}
+                onClick={handleDeleteReview}
+              >
+                Eliminar mi reseña
+              </Button>
+            )}
+          </div>
+        </form>
+      )}
+
+      {loadingReviews ? (
+        <p className="py-6 text-sm text-gray-500">Cargando reseñas...</p>
+      ) : visibleReviews.length === 0 ? (
+        <p className="py-6 text-sm text-gray-500">
+          Este negocio todavía no tiene reseñas. Sé la primera persona en
+          compartir su experiencia.
+        </p>
+      ) : (
+        <div className="divide-y">
+          {visibleReviews.map((review) => (
+            <article key={review.id} className="py-5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="font-semibold text-gray-900">
+                    {review.author_name}
+                  </h3>
+                  <p className="text-xs text-gray-500">
+                    {new Intl.DateTimeFormat("es-MX", {
+                      day: "numeric",
+                      month: "long",
+                      year: "numeric",
+                    }).format(new Date(review.created_at))}
+                  </p>
+                </div>
+                <ReviewStars value={review.rating} readOnly size="text-lg" />
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                {typeof review.would_return === "boolean" && (
+                  <span
+                    className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+                      review.would_return
+                        ? "bg-green-100 text-green-800"
+                        : "bg-gray-100 text-gray-700"
+                    }`}
+                  >
+                    {review.would_return ? "Sí volvería" : "No volvería"}
+                  </span>
+                )}
+                {(review.tags || []).map((tag) => (
+                  <span
+                    key={tag}
+                    className="rounded-full bg-blue-50 px-2.5 py-1 text-xs text-blue-800"
+                  >
+                    {getReviewTagLabel(tag)}
+                  </span>
+                ))}
+              </div>
+              {review.comment && (
+                <p className="mt-3 whitespace-pre-wrap text-gray-700">
+                  {review.comment}
+                </p>
+              )}
+              <button
+                type="button"
+                onClick={() => handleHelpfulVote(review)}
+                disabled={review.user_id === user?.id}
+                className={`mt-4 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm transition ${
+                  review.viewer_has_voted
+                    ? "border-blue-600 bg-blue-50 font-semibold text-blue-700"
+                    : "border-gray-300 text-gray-600 hover:border-blue-400 hover:text-blue-700"
+                } disabled:cursor-not-allowed disabled:opacity-50`}
+                title={
+                  review.user_id === user?.id
+                    ? "No puedes votar tu propia reseña"
+                    : "Indica que esta reseña te sirvió"
+                }
+              >
+                👍 Me sirvió
+                {review.helpful_count > 0 && (
+                  <span>{review.helpful_count}</span>
+                )}
+              </button>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+};
+
 /* --------------------------- Página de negocio --------------------------- */
 const BusinessDetailPage = () => {
   const { slug } = useParams();
@@ -391,6 +912,7 @@ const BusinessDetailPage = () => {
         .eq("slug", slug)
         .eq("is_deleted", false)
         .eq("is_approved", true)
+        .neq("categoria", PUBLIC_EXCLUDED_CATEGORY)
         .maybeSingle();
 
       if (error) {
@@ -961,6 +1483,7 @@ const BusinessDetailPage = () => {
 
   // URL segura para el logo
   const logoSrc = resolvePublicUrl(business?.logo_url);
+  const publicBusinessImage = getPublicBusinessImage(business);
 
   // --- SEO helpers (no UI impact) ---
   const canonicalUrl = `https://iztapamarket.com/negocio/${business?.slug}`;
@@ -968,19 +1491,21 @@ const BusinessDetailPage = () => {
   // Prefer logo, then portada, then imagen_url; always try to resolve to an absolute URL
   const resolvedSeoImage =
     optimizeImage(
-      resolvePublicUrl(business?.logo_url) ||
+        resolvePublicUrl(business?.logo_url) ||
         resolvePublicUrl(business?.portada_url) ||
-        resolvePublicUrl(business?.imagen_url) ||
+        resolvePublicUrl(publicBusinessImage) ||
         business?.logo_url ||
         business?.portada_url ||
-        business?.imagen_url ||
+        publicBusinessImage ||
         ""
     ) || "";
   const seoImage = resolvedSeoImage.startsWith("/")
     ? `https://iztapamarket.com${resolvedSeoImage}`
     : resolvedSeoImage;
 
-  const seoTitle = business?.metaTitle || `${business?.nombre} | IztapaMarket`;
+  const publicBusinessName = getPublicBusinessName(business);
+  const seoTitle =
+    business?.metaTitle || `${publicBusinessName} | IztapaMarket`;
   const seoDescription =
     business?.metaDescription ||
     (business?.descripcion ? business.descripcion.slice(0, 160) : "");
@@ -1006,7 +1531,7 @@ const BusinessDetailPage = () => {
           {JSON.stringify({
             "@context": "https://schema.org",
             "@type": "LocalBusiness",
-            name: business?.nombre || "",
+            name: publicBusinessName,
             description: business?.descripcion || "",
             image: seoImage,
             telephone: business?.telefono || "",
@@ -1034,7 +1559,7 @@ const BusinessDetailPage = () => {
           {logoSrc && (
             <img
               src={logoSrc}
-              alt={`Logo de ${business.nombre}`}
+              alt={`Logo de ${publicBusinessName}`}
               className="h-24 md:h-28 lg:h-32 w-auto mb-4"
               width="512"
               height="512"
@@ -1043,7 +1568,7 @@ const BusinessDetailPage = () => {
               onError={(e) => (e.currentTarget.style.display = "none")}
             />
           )}
-          <h1 className="text-4xl font-bold mb-2">{business.nombre}</h1>
+          <h1 className="text-4xl font-bold mb-2">{publicBusinessName}</h1>
           <Badge variant="outline">{prettyCategory(business.categoria)}</Badge>
           {plan === "pro" && (
             <Badge className="bg-blue-100 text-blue-800 border border-blue-300 ml-2">
@@ -1120,7 +1645,7 @@ const BusinessDetailPage = () => {
 
               <LightboxGallery
                 images={business.gallery_images.slice(0, galleryLimit)}
-                title={business.nombre}
+                title={publicBusinessName}
               />
             </section>
           );
@@ -1234,12 +1759,12 @@ const BusinessDetailPage = () => {
 
         {plan === "free" && (
           <>
-            {business.imagen_url && (
+            {publicBusinessImage && (
               <img
                 src={
-                  resolvePublicUrl(business.imagen_url) || business.imagen_url
+                  resolvePublicUrl(publicBusinessImage) || publicBusinessImage
                 }
-                alt={business.nombre}
+                alt={publicBusinessName}
                 className="w-full max-h-96 object-cover rounded-lg mb-6"
                 onError={(e) => (e.currentTarget.style.display = "none")}
                 loading="lazy"
@@ -1327,12 +1852,12 @@ const BusinessDetailPage = () => {
 
         {plan === "pro" && (
           <>
-            {business.imagen_url && (
+            {publicBusinessImage && (
               <img
                 src={
-                  resolvePublicUrl(business.imagen_url) || business.imagen_url
+                  resolvePublicUrl(publicBusinessImage) || publicBusinessImage
                 }
-                alt={business.nombre}
+                alt={publicBusinessName}
                 className="w-full max-h-96 object-cover rounded-lg mb-6"
                 onError={(e) => (e.currentTarget.style.display = "none")}
                 loading="lazy"
@@ -1467,6 +1992,8 @@ const BusinessDetailPage = () => {
 
         {/* Menú (al final) */}
         {shouldShowMenu && renderMenuBlock()}
+
+        <BusinessReviews business={business} />
 
         {plan === "premium" && (
           <div className="bg-green-50 border-l-4 border-green-500 text-green-800 p-4 rounded mt-10">

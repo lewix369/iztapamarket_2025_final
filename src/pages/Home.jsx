@@ -24,17 +24,15 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/ui/use-toast";
 import { useSupabase } from "@/contexts/SupabaseContext";
-import { getFeaturedBusinesses } from "@/lib/database";
+import {
+  getBusinessReviewSummaries,
+  getFeaturedBusinesses,
+  getPublicBusinessImage,
+  getPublicBusinessName,
+} from "@/lib/database";
 
 // Elige la mejor imagen disponible para mostrar (evita que no salgan los destacados)
-const pickImage = (b) =>
-  b?.portada_url ||
-  b?.imagen_url ||
-  b?.cover_image_url ||
-  b?.business_cover_url ||
-  b?.logo_url ||
-  b?.image_url ||
-  null;
+const pickImage = (b) => getPublicBusinessImage(b) || null;
 
 // Estilos del CTA "Ver más" según el plan del negocio
 const getCtaClass = (plan) => {
@@ -70,7 +68,17 @@ const HomePage = () => {
     const approved = Array.isArray(data)
       ? data.filter((b) => b && b.is_approved && b.nombre && b.slug)
       : [];
-    setFeaturedBusinesses(approved);
+    const summaries = await getBusinessReviewSummaries(
+      supabase,
+      approved.map((business) => business.id)
+    );
+    setFeaturedBusinesses(
+      approved.map((business) => ({
+        ...business,
+        rating: summaries[business.id]?.rating || 0,
+        reviews_count: summaries[business.id]?.reviews_count || 0,
+      }))
+    );
   }, [supabase]);
 
   useEffect(() => {
@@ -314,7 +322,7 @@ const HomePage = () => {
                     <div className="relative">
                       <img
                         src={pickImage(b) || "/placeholder-card.png"}
-                        alt={b.nombre}
+                        alt={getPublicBusinessName(b)}
                         className="w-full h-40 object-cover rounded-md"
                         loading="lazy"
                         onError={(e) => {
@@ -325,14 +333,22 @@ const HomePage = () => {
                       {/* Badge Premium sobre la portada */}
                       {String(b.plan_type).toLowerCase() === "premium" && (
                         <div className="absolute left-2 top-2 flex items-center gap-1 rounded-full bg-black/55 backdrop-blur px-2 py-1 shadow-sm ring-1 ring-white/10">
-                          {[0, 1, 2, 3, 4].map((i) => (
+                          {b.reviews_count > 0 && (
                             <Star
-                              key={i}
                               aria-hidden="true"
                               className="w-4 h-4 text-yellow-400 fill-yellow-400"
                             />
-                          ))}
-                          <span className="ml-1 text-[11px] text-white/90 font-semibold">
+                          )}
+                          {b.reviews_count > 0 && (
+                            <span className="text-[11px] font-semibold text-white">
+                              {Number(b.rating).toFixed(1)} ({b.reviews_count})
+                            </span>
+                          )}
+                          <span
+                            className={`text-[11px] text-white/90 font-semibold ${
+                              b.reviews_count > 0 ? "ml-1" : ""
+                            }`}
+                          >
                             Premium
                           </span>
                         </div>
@@ -341,7 +357,9 @@ const HomePage = () => {
                   </CardHeader>
                   <CardContent>
                     {/* Título */}
-                    <CardTitle className="text-center">{b.nombre}</CardTitle>
+                    <CardTitle className="text-center">
+                      {getPublicBusinessName(b)}
+                    </CardTitle>
 
                     {/* Descripción */}
                     <CardDescription className="mt-2 text-sm text-gray-600 line-clamp-4 text-justify">

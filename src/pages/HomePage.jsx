@@ -4,6 +4,11 @@ import { useSupabase } from "@/contexts/SupabaseContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Link } from "react-router-dom";
+import {
+  getPublicBusinessImage,
+  getPublicBusinessName,
+  PUBLIC_EXCLUDED_CATEGORY,
+} from "@/lib/database";
 
 // Local fallback (no external requests like via.placeholder.com)
 const FALLBACK_IMG =
@@ -48,6 +53,7 @@ const HomePage = () => {
         .from("negocios")
         .select("*")
         .or("plan_type.eq.premium,plan_type.eq.pro")
+        .neq("categoria", PUBLIC_EXCLUDED_CATEGORY)
         .eq("is_featured", true);
 
       if (!error && data) {
@@ -82,8 +88,13 @@ const HomePage = () => {
             featuredBusinesses.map((business) => (
               <Card key={business.id}>
                 <img
-                  src={toSupabaseThumb(business.imagen_url, { width: 600, quality: 70 }) || FALLBACK_IMG}
-                  alt={business.nombre}
+                  src={
+                    toSupabaseThumb(getPublicBusinessImage(business), {
+                      width: 600,
+                      quality: 70,
+                    }) || FALLBACK_IMG
+                  }
+                  alt={getPublicBusinessName(business)}
                   className="w-full h-40 object-cover"
                   loading="lazy"
                   decoding="async"
@@ -92,7 +103,7 @@ const HomePage = () => {
                   }}
                 />
                 <CardHeader>
-                  <CardTitle>{business.nombre}</CardTitle>
+                  <CardTitle>{getPublicBusinessName(business)}</CardTitle>
                 </CardHeader>
                 <CardContent>
                   <p className="text-sm text-gray-600 mb-4">

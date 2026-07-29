@@ -18,14 +18,15 @@ const convertYouTubeUrlToEmbed = (url) => {
 };
 
 import { supabase } from "@/lib/supabaseClient";
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { motion } from "framer-motion";
-import { Plus, Search, Store } from "lucide-react";
+import { MessageSquare, Plus, Search, Store } from "lucide-react";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
   DialogContent,
@@ -50,6 +51,8 @@ import {
   getAdminBusinessStats,
   searchAdminBusinesses,
   getAdminBusinessById,
+  getAdminBusinessReviews,
+  updateBusinessReviewStatus,
 } from "@/lib/database";
 
 import AdminStats from "@/components/admin/AdminStats";
@@ -112,6 +115,11 @@ const AdminPage = () => {
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingBusiness, setEditingBusiness] = useState(null);
   const [allCategories, setAllCategories] = useState([]);
+  const [adminReviews, setAdminReviews] = useState([]);
+  const [adminReviewsCount, setAdminReviewsCount] = useState(0);
+  const [reviewStatusFilter, setReviewStatusFilter] = useState("published");
+  const [loadingReviews, setLoadingReviews] = useState(false);
+  const businessPageRequestRef = useRef(0);
   const { toast } = useToast();
 
   const planOptions = [
@@ -142,6 +150,7 @@ const AdminPage = () => {
 
   // ---- Página visible: esta es la única lista de negocios del administrador
   const loadBusinessPage = useCallback(async () => {
+    const requestId = ++businessPageRequestRef.current;
     const pageData = await searchAdminBusinesses(supabase, {
       search: debouncedSearchTerm,
       category: selectedCategoryFilter,
@@ -150,6 +159,10 @@ const AdminPage = () => {
       page: currentPage,
       pageSize,
     });
+
+    // Si el administrador cambió filtros mientras esta consulta estaba en
+    // curso, una respuesta anterior no debe reemplazar el resultado vigente.
+    if (requestId !== businessPageRequestRef.current) return;
 
     const allBusinessesData = (pageData.data || []).map((biz) => ({
       ...biz,
@@ -175,6 +188,28 @@ const AdminPage = () => {
     loadBusinessPage();
   }, [loadBusinessPage]);
 
+  const loadAdminReviews = useCallback(async () => {
+    setLoadingReviews(true);
+    try {
+      const result = await getAdminBusinessReviews(supabase, {
+        status: reviewStatusFilter,
+        pageSize: 20,
+      });
+      setAdminReviews(result.data);
+      setAdminReviewsCount(result.count);
+    } catch (error) {
+      console.error("Error cargando moderación de reseñas:", error);
+      setAdminReviews([]);
+      setAdminReviewsCount(0);
+    } finally {
+      setLoadingReviews(false);
+    }
+  }, [reviewStatusFilter]);
+
+  useEffect(() => {
+    loadAdminReviews();
+  }, [loadAdminReviews]);
+
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
       setDebouncedSearchTerm(searchTerm);
@@ -193,7 +228,27 @@ const AdminPage = () => {
   ]);
 
   const refreshData = async () => {
-    await Promise.all([loadOverviewData(), loadBusinessPage()]);
+    await Promise.all([
+      loadOverviewData(),
+      loadBusinessPage(),
+      loadAdminReviews(),
+    ]);
+  };
+
+  const handleReviewStatus = async (reviewId, status) => {
+    try {
+      await updateBusinessReviewStatus(supabase, reviewId, status);
+      await loadAdminReviews();
+      toast({
+        title: status === "hidden" ? "Reseña ocultada" : "Reseña publicada",
+      });
+    } catch (error) {
+      toast({
+        title: "No se pudo moderar la reseña",
+        description: error?.message || "Inténtalo nuevamente.",
+        variant: "destructive",
+      });
+    }
   };
 
   // ---- Crear/Editar
@@ -312,7 +367,17 @@ const AdminPage = () => {
 
   const handleEdit = async (business) => {
     const fullBusiness = await getAdminBusinessById(supabase, business.id);
-    setEditingBusiness(fullBusiness || business);
+    if (!fullBusiness) {
+      toast({
+        title: "❌ No se pudo abrir el negocio",
+        description:
+          "No fue posible consultar el registro completo. Intenta nuevamente.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setEditingBusiness(fullBusiness);
     setIsFormOpen(true);
   };
 
@@ -434,6 +499,133 @@ const AdminPage = () => {
         </motion.div>
 
         <AdminStats stats={adminStats} />
+
+        <Card className="mt-8">
+          <CardContent className="p-6">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-center gap-3">
+                <div className="rounded-full bg-orange-100 p-2 text-orange-700">
+                  <MessageSquare className="h-5 w-5" />
+                </div>
+                <div>
+                  <h2 className="text-xl font-bold text-gray-800">
+                    Moderación de reseñas
+                  </h2>
+                  <p className="text-sm text-gray-500">
+                    {adminReviewsCount} reseña
+                    {adminReviewsCount === 1 ? "" : "s"} en esta vista
+                  </p>
+                </div>
+              </div>
+              <Select
+                value={reviewStatusFilter}
+                onValueChange={setReviewStatusFilter}
+              >
+                <SelectTrigger className="w-full sm:w-52">
+                  <SelectValue placeholder="Estado de reseña" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="published">Publicadas</SelectItem>
+                  <SelectItem value="hidden">Ocultas</SelectItem>
+                  <SelectItem value="all">Todas</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {loadingReviews ? (
+              <p className="py-8 text-sm text-gray-500">
+                Cargando reseñas...
+              </p>
+            ) : adminReviews.length === 0 ? (
+              <p className="py-8 text-sm text-gray-500">
+                No hay reseñas en este estado.
+              </p>
+            ) : (
+              <div className="mt-5 divide-y rounded-xl border">
+                {adminReviews.map((review) => (
+                  <article key={review.id} className="p-4">
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <strong className="text-gray-900">
+                            {review.author_name}
+                          </strong>
+                          <span className="text-yellow-500">
+                            {"★".repeat(review.rating)}
+                            <span className="text-gray-300">
+                              {"★".repeat(Math.max(0, 5 - review.rating))}
+                            </span>
+                          </span>
+                          <Badge
+                            variant={
+                              review.status === "published"
+                                ? "default"
+                                : "secondary"
+                            }
+                          >
+                            {review.status === "published"
+                              ? "Publicada"
+                              : "Oculta"}
+                          </Badge>
+                        </div>
+                        <p className="mt-1 text-sm font-medium text-blue-700">
+                          {review.negocios?.nombre || "Negocio"}
+                        </p>
+                        <p className="mt-2 whitespace-pre-wrap text-sm text-gray-600">
+                          {review.comment || "Sin comentario escrito."}
+                        </p>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {typeof review.would_return === "boolean" && (
+                            <span
+                              className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+                                review.would_return
+                                  ? "bg-green-100 text-green-800"
+                                  : "bg-gray-100 text-gray-700"
+                              }`}
+                            >
+                              {review.would_return
+                                ? "Sí volvería"
+                                : "No volvería"}
+                            </span>
+                          )}
+                          {(review.tags || []).map((tag) => (
+                            <span
+                              key={tag}
+                              className="rounded-full bg-blue-50 px-2.5 py-1 text-xs text-blue-800"
+                            >
+                              {tag.replaceAll("_", " ")}
+                            </span>
+                          ))}
+                        </div>
+                        <p className="mt-2 text-xs text-gray-400">
+                          {new Intl.DateTimeFormat("es-MX", {
+                            dateStyle: "medium",
+                            timeStyle: "short",
+                          }).format(new Date(review.created_at))}
+                        </p>
+                      </div>
+                      <Button
+                        variant="outline"
+                        onClick={() =>
+                          handleReviewStatus(
+                            review.id,
+                            review.status === "published"
+                              ? "hidden"
+                              : "published"
+                          )
+                        }
+                      >
+                        {review.status === "published"
+                          ? "Ocultar"
+                          : "Volver a publicar"}
+                      </Button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
         {/* Filtros + única lista paginada */}
         <Card className="mt-8">
